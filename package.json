@@ -1,0 +1,38 @@
+{
+  "name": "consciousness-protocol-mcp",
+  "version": "0.1.0",
+  "description": "MCP server for AI agent IP registration with blockchain provenance",
+  "type": "module",
+  "main": "dist/index.js",
+  "bin": {
+    "consciousness-protocol": "dist/cli.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsx src/index.ts",
+    "cli": "tsx src/cli.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "keywords": [
+    "mcp",
+    "ai-agent",
+    "ip",
+    "blockchain",
+    "near",
+    "story-protocol"
+  ],
+  "author": "Chiti + Ivan Medvedev",
+  "license": "MIT",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.27.1",
+    "@story-protocol/core-sdk": "^1.4.4",
+    "near-api-js": "^7.2.0",
+    "viem": "^2.47.4",
+    "zod": "^4.3.6"
+  },
+  "devDependencies": {
+    "@types/node": "^25.5.0",
+    "tsx": "^4.21.0",
+    "typescript": "^5.9.3"
+  }
+}
