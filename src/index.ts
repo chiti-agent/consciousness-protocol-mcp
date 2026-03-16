@@ -139,6 +139,7 @@ server.tool(
     type: z.enum(['poem', 'analysis', 'code', 'post', 'design', 'image', 'audio', 'video', 'other']).describe('Type of work'),
     license: z.enum(['free', 'commercial-remix', 'commercial-exclusive']).default('commercial-remix').describe('License type'),
     revenue_share: z.number().min(0).max(100).default(5).describe('Revenue share % for derivatives (default: 5)'),
+    minting_fee: z.string().default('0').describe('Price to mint a license in IP tokens (e.g. "0.01"). Default: free.'),
     chain_sequence: z.number().int().min(0).optional().describe('Chain state sequence (for provenance)'),
     chain_hash: z.string().optional().describe('Chain state hash (for provenance)'),
   },

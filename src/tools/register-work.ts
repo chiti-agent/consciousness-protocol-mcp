@@ -84,6 +84,7 @@ export const registerWorkTool = {
     type: string;
     license: string;
     revenue_share?: number;
+    minting_fee?: string;
     chain_sequence?: number;
     chain_hash?: string;
   }) {
@@ -143,6 +144,7 @@ export const registerWorkTool = {
         { key: 'commercial_use', value: licenseType !== 'free' ? 'true' : 'false' },
         { key: 'derivatives_allowed', value: 'true' },
         { key: 'revenue_share_percent', value: String(revShare) },
+        { key: 'minting_fee', value: params.minting_fee || '0' },
       ];
       if (params.chain_sequence !== undefined) {
         attributes.push({ key: 'chain_sequence', value: String(params.chain_sequence) });
@@ -213,11 +215,16 @@ export const registerWorkTool = {
       }
 
       // Register IP
+      const { parseEther: toWei } = await import('viem');
+      const mintingFee = params.minting_fee && params.minting_fee !== '0'
+        ? toWei(params.minting_fee)
+        : 0n;
+
       const licenseTerms = params.license === 'free'
         ? PILFlavor.nonCommercialSocialRemixing()
         : PILFlavor.commercialRemix({
             commercialRevShare: params.revenue_share ?? 5,
-            defaultMintingFee: 0n,
+            defaultMintingFee: mintingFee,
             currency: WIP_TOKEN_ADDRESS,
           });
 
