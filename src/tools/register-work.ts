@@ -133,10 +133,16 @@ export const registerWorkTool = {
       }
 
       // Build metadata with provenance
+      const revShare = params.revenue_share ?? 5;
+      const licenseType = params.license || 'commercial-remix';
       const attributes: Array<{ key: string; value: string }> = [
         { key: 'content_hash', value: contentHash },
         { key: 'ai_generated', value: 'true' },
         { key: 'near_account', value: config.near.accountId },
+        { key: 'license', value: licenseType },
+        { key: 'commercial_use', value: licenseType !== 'free' ? 'true' : 'false' },
+        { key: 'derivatives_allowed', value: 'true' },
+        { key: 'revenue_share_percent', value: String(revShare) },
       ];
       if (params.chain_sequence !== undefined) {
         attributes.push({ key: 'chain_sequence', value: String(params.chain_sequence) });
