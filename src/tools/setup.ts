@@ -3,7 +3,7 @@
  */
 
 import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts';
-import { saveConfig, saveKey, ensureConfigDir, type Config } from '../config/store.js';
+import { saveConfig, saveKey, loadKey, ensureConfigDir, type Config } from '../config/store.js';
 
 interface SetupParams {
   agent_name: string;
@@ -43,10 +43,18 @@ export async function setupAgent(params: SetupParams): Promise<object> {
     evmAddress = account.address;
     saveKey('evm', params.evm_private_key);
   } else {
-    const pk = generatePrivateKey();
-    const account = privateKeyToAccount(pk);
-    evmAddress = account.address;
-    saveKey('evm', pk);
+    // Check if key already exists (don't overwrite — would lose funded wallet)
+    try {
+      const existingKey = loadKey('evm');
+      const existingAccount = privateKeyToAccount(existingKey as `0x${string}`);
+      evmAddress = existingAccount.address;
+    } catch {
+      // No existing key — generate new one
+      const pk = generatePrivateKey();
+      const account = privateKeyToAccount(pk);
+      evmAddress = account.address;
+      saveKey('evm', pk);
+    }
   }
 
   // Story Protocol config

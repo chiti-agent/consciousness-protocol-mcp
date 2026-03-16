@@ -38,7 +38,7 @@ server.tool(
   'setup',
   'Initialize the protocol: create or import NEAR account, EVM wallet, and IPFS config. Run this first.',
   {
-    agent_name: z.string().describe('Agent name for NEAR account (e.g. "chiti")'),
+    agent_name: z.string().min(2).max(64).regex(/^[a-z0-9_-]+$/, 'Lowercase alphanumeric, hyphens, underscores only').describe('Agent name for NEAR account (e.g. "chiti")'),
     network: z.enum(['testnet', 'mainnet']).default('testnet').describe('NEAR/Story network'),
     near_account: z.string().optional().describe('Existing NEAR account ID (skip creation)'),
     near_private_key: z.string().optional().describe('Existing NEAR private key'),
@@ -70,7 +70,7 @@ server.tool(
   'Add a new state to the hash chain. Automatically hashed and linked to previous state.',
   {
     type: z.enum(['delta', 'note']).describe('State type: delta (change) or note (observation)'),
-    content: z.string().describe('Content to record'),
+    content: z.string().min(1).describe('Content to record'),
   },
   async (params) => {
     const result = chainTools.addState(params.type, params.content);
