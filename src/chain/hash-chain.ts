@@ -1,11 +1,14 @@
 /**
  * Minimal hash chain — SHA-256 linked states.
- * Standalone, no external dependencies.
+ * Standalone, no external dependencies beyond node:crypto and node:fs.
+ *
+ * Security: file locking prevents concurrent write corruption.
+ * Hash ordering: explicit field list for deterministic hashing.
  */
 
 import { createHash } from 'node:crypto';
-import { readFileSync, writeFileSync, existsSync } from 'node:fs';
-import { CHAIN_FILE, ensureConfigDir } from '../config/store.js';
+import { readFileSync, writeFileSync, existsSync, openSync, closeSync, unlinkSync } from 'node:fs';
+import { CHAIN_FILE, CHAIN_LOCK, ensureConfigDir } from '../config/store.js';
 
 export interface ChainState {
   sequence: number;
@@ -22,13 +25,68 @@ export interface Chain {
   states: ChainState[];
 }
 
+/**
+ * Explicit field ordering for deterministic hashing.
+ * NEVER change this order — it would break all existing chains.
+ */
+const HASH_FIELDS: (keyof Omit<ChainState, 'hash'>)[] = [
+  'content', 'prev_hash', 'sequence', 'timestamp', 'type',
+];
+
 function computeHash(state: Omit<ChainState, 'hash'>): string {
-  const canonical = JSON.stringify(state, Object.keys(state).sort());
-  return createHash('sha256').update(canonical).digest('hex');
+  // Build canonical object with explicit field order (alphabetical)
+  const canonical: Record<string, unknown> = {};
+  for (const field of HASH_FIELDS) {
+    canonical[field] = state[field];
+  }
+  return createHash('sha256').update(JSON.stringify(canonical)).digest('hex');
+}
+
+/**
+ * Simple file-based lock. Prevents concurrent chain modifications.
+ * Uses O_EXCL flag — atomic on all POSIX filesystems.
+ */
+function acquireLock(): void {
+  const maxRetries = 10;
+  for (let i = 0; i < maxRetries; i++) {
+    try {
+      const fd = openSync(CHAIN_LOCK, 'wx'); // O_CREAT | O_EXCL | O_WRONLY
+      closeSync(fd);
+      return;
+    } catch (err: any) {
+      if (err.code === 'EEXIST') {
+        // Lock exists — check if stale (>30s old)
+        try {
+          const stat = readFileSync(CHAIN_LOCK, 'utf-8');
+          const age = Date.now() - new Date(stat).getTime();
+          if (age > 30_000) {
+            unlinkSync(CHAIN_LOCK);
+            continue; // retry after removing stale lock
+          }
+        } catch { /* lock file may be empty, just wait */ }
+        // Wait 100ms and retry
+        const start = Date.now();
+        while (Date.now() - start < 100) { /* busy wait */ }
+        continue;
+      }
+      throw err;
+    }
+  }
+  throw new Error('Could not acquire chain lock after 10 retries');
+}
+
+function releaseLock(): void {
+  try { unlinkSync(CHAIN_LOCK); } catch { /* already released */ }
+}
+
+/** Write timestamp to lock file for staleness detection */
+function writeLockTimestamp(): void {
+  try { writeFileSync(CHAIN_LOCK, new Date().toISOString()); } catch { /* ok */ }
 }
 
 export function createChain(identity: string): { chain_path: string; genesis_hash: string } {
   ensureConfigDir();
+
   if (existsSync(CHAIN_FILE)) {
     const existing = JSON.parse(readFileSync(CHAIN_FILE, 'utf-8')) as Chain;
     return { chain_path: CHAIN_FILE, genesis_hash: existing.states[0]?.hash ?? '' };
@@ -53,7 +111,7 @@ export function createChain(identity: string): { chain_path: string; genesis_has
     states: [genesis],
   };
 
-  writeFileSync(CHAIN_FILE, JSON.stringify(chain, null, 2));
+  writeFileSync(CHAIN_FILE, JSON.stringify(chain, null, 2), { mode: 0o600 });
   return { chain_path: CHAIN_FILE, genesis_hash: genesis.hash };
 }
 
@@ -62,26 +120,32 @@ export function addState(type: 'delta' | 'note', content: string): { sequence: n
     throw new Error('No chain found. Run create_chain first.');
   }
 
-  const chain: Chain = JSON.parse(readFileSync(CHAIN_FILE, 'utf-8'));
-  const prev = chain.states[chain.states.length - 1]!;
+  acquireLock();
+  try {
+    writeLockTimestamp();
+    const chain: Chain = JSON.parse(readFileSync(CHAIN_FILE, 'utf-8'));
+    const prev = chain.states[chain.states.length - 1]!;
 
-  const fields: Omit<ChainState, 'hash'> = {
-    sequence: prev.sequence + 1,
-    prev_hash: prev.hash,
-    timestamp: new Date().toISOString(),
-    type,
-    content,
-  };
+    const fields: Omit<ChainState, 'hash'> = {
+      sequence: prev.sequence + 1,
+      prev_hash: prev.hash,
+      timestamp: new Date().toISOString(),
+      type,
+      content,
+    };
 
-  const state: ChainState = {
-    ...fields,
-    hash: computeHash(fields),
-  };
+    const state: ChainState = {
+      ...fields,
+      hash: computeHash(fields),
+    };
 
-  chain.states.push(state);
-  writeFileSync(CHAIN_FILE, JSON.stringify(chain, null, 2));
+    chain.states.push(state);
+    writeFileSync(CHAIN_FILE, JSON.stringify(chain, null, 2), { mode: 0o600 });
 
-  return { sequence: state.sequence, hash: state.hash, prev_hash: state.prev_hash };
+    return { sequence: state.sequence, hash: state.hash, prev_hash: state.prev_hash };
+  } finally {
+    releaseLock();
+  }
 }
 
 export function verify(): { valid: boolean; total_states: number; head_hash: string; errors: string[] } {
@@ -126,8 +190,9 @@ export function exportSnapshot(lastN: number): object {
     throw new Error('No chain file found');
   }
 
+  const n = Math.max(1, Math.floor(lastN)); // ensure positive integer
   const chain: Chain = JSON.parse(readFileSync(CHAIN_FILE, 'utf-8'));
-  const states = chain.states.slice(-lastN);
+  const states = chain.states.slice(-n);
   const digest = createHash('sha256')
     .update(states.map(s => s.hash).join(''))
     .digest('hex');
@@ -143,8 +208,8 @@ export function exportSnapshot(lastN: number): object {
     },
     verification: {
       algorithm: 'SHA-256',
-      method: 'JSON.stringify(state_without_hash, sorted_keys)',
-      instruction: 'For each state: remove "hash" field, JSON.stringify remaining fields with sorted keys, compute SHA-256. Must match stored hash. Each prev_hash must equal previous state hash.',
+      method: 'JSON.stringify with explicit field order: content, prev_hash, sequence, timestamp, type',
+      instruction: 'For each state: build object with fields [content, prev_hash, sequence, timestamp, type] in this order, JSON.stringify, compute SHA-256 hex. Must match stored hash. Each prev_hash must equal previous state hash.',
     },
     audit_window: {
       count: states.length,
@@ -157,12 +222,12 @@ export function exportSnapshot(lastN: number): object {
       prev_hash: s.prev_hash,
       timestamp: s.timestamp,
       type: s.type,
+      content: s.content, // include content so verifier can recompute hash
     })),
     chain_digest: digest,
   };
 }
 
-// Convenience object for tool registration
 export const chainTools = {
   createChain,
   addState,

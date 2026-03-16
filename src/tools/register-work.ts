@@ -34,6 +34,7 @@ async function uploadToIPFS(config: Config, data: object): Promise<string> {
         pinataContent: data,
         pinataMetadata: { name: `cp-${Date.now()}` },
       }),
+      signal: AbortSignal.timeout(30_000), // 30s timeout
     });
     if (!res.ok) throw new Error(`Pinata: ${res.status}`);
     const result = await res.json() as { IpfsHash: string };
@@ -43,6 +44,26 @@ async function uploadToIPFS(config: Config, data: object): Promise<string> {
   const json = JSON.stringify(data);
   const hash = createHash('sha256').update(json).digest('hex');
   return `data:application/json;hash=${hash}`;
+}
+
+async function uploadFileToIPFS(config: Config, buffer: Buffer, filename: string): Promise<string> {
+  if (config.ipfs.pinataJwt) {
+    const formData = new FormData();
+    formData.append('file', new Blob([new Uint8Array(buffer)]), filename);
+    formData.append('pinataMetadata', JSON.stringify({ name: `cp-file-${Date.now()}` }));
+
+    const res = await fetch('https://api.pinata.cloud/pinning/pinFileToIPFS', {
+      method: 'POST',
+      headers: { 'Authorization': `Bearer ${config.ipfs.pinataJwt}` },
+      body: formData,
+      signal: AbortSignal.timeout(60_000), // 60s timeout for file upload
+    });
+    if (!res.ok) throw new Error(`Pinata file upload: ${res.status}`);
+    const result = await res.json() as { IpfsHash: string };
+    return `ipfs://${result.IpfsHash}`;
+  }
+  const hash = createHash('sha256').update(buffer).digest('hex');
+  return `data:application/octet-stream;hash=${hash}`;
 }
 
 function logRegistration(entry: object) {
@@ -57,13 +78,20 @@ function logRegistration(entry: object) {
 export const registerWorkTool = {
   async register(config: Config, params: {
     title: string;
-    content: string;
+    content?: string;
+    file_path?: string;
+    media_type?: string;
     type: string;
     license: string;
+    revenue_share?: number;
     chain_sequence?: number;
     chain_hash?: string;
   }) {
     try {
+      if (!params.content && !params.file_path) {
+        return { success: false, error: 'Either content or file_path is required' };
+      }
+
       const client = await getStoryClient(config);
       const { PILFlavor, WIP_TOKEN_ADDRESS } = await import('@story-protocol/core-sdk');
       const { privateKeyToAccount } = await import('viem/accounts');
@@ -72,7 +100,37 @@ export const registerWorkTool = {
 
       const pk = loadKey('evm');
       const account = privateKeyToAccount(pk as `0x${string}`);
-      const contentHash = createHash('sha256').update(params.content).digest('hex');
+
+      // Handle text content or file
+      let contentHash: string;
+      let ipType: string;
+      let mediaUrl: string | undefined;
+
+      if (params.file_path) {
+        const { readFileSync } = await import('node:fs');
+        const { extname } = await import('node:path');
+        const fileBuffer = readFileSync(params.file_path);
+        contentHash = createHash('sha256').update(fileBuffer).digest('hex');
+
+        // Detect MIME type from extension
+        const ext = extname(params.file_path).toLowerCase();
+        const mimeMap: Record<string, string> = {
+          '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg',
+          '.gif': 'image/gif', '.webp': 'image/webp', '.svg': 'image/svg+xml',
+          '.mp3': 'audio/mpeg', '.wav': 'audio/wav', '.ogg': 'audio/ogg',
+          '.mp4': 'video/mp4', '.webm': 'video/webm',
+          '.ts': 'text/typescript', '.js': 'text/javascript', '.py': 'text/x-python',
+          '.rs': 'text/x-rust', '.go': 'text/x-go', '.sol': 'text/x-solidity',
+          '.md': 'text/markdown', '.txt': 'text/plain', '.json': 'application/json',
+        };
+        ipType = params.media_type || mimeMap[ext] || 'application/octet-stream';
+
+        // Upload file to IPFS
+        mediaUrl = await uploadFileToIPFS(config, fileBuffer, params.title + ext);
+      } else {
+        contentHash = createHash('sha256').update(params.content!).digest('hex');
+        ipType = params.media_type || `text/${params.type}`;
+      }
 
       // Build metadata with provenance
       const attributes: Array<{ key: string; value: string }> = [
@@ -87,17 +145,24 @@ export const registerWorkTool = {
         attributes.push({ key: 'chain_hash', value: params.chain_hash });
       }
 
-      const ipMetadata = client.ipAsset.generateIpMetadata({
+      const metadataInput: Record<string, unknown> = {
         title: params.title,
         description: `AI-generated ${params.type} with blockchain provenance`,
-        ipType: `text/${params.type}`,
+        ipType,
         creators: [{
           name: config.near.accountId,
           address: account.address as Address,
           contributionPercent: 100,
         }],
         attributes,
-      });
+      };
+      // Add media fields for non-text content
+      if (mediaUrl) {
+        metadataInput.mediaUrl = mediaUrl;
+        metadataInput.mediaHash = '0x' + contentHash;
+        metadataInput.mediaType = ipType;
+      }
+      const ipMetadata = client.ipAsset.generateIpMetadata(metadataInput as any);
 
       // Upload to IPFS
       const ipMetadataURI = await uploadToIPFS(config, ipMetadata);
@@ -131,7 +196,7 @@ export const registerWorkTool = {
       const licenseTerms = params.license === 'free'
         ? PILFlavor.nonCommercialSocialRemixing()
         : PILFlavor.commercialRemix({
-            commercialRevShare: 5,
+            commercialRevShare: params.revenue_share ?? 5,
             defaultMintingFee: 0n,
             currency: WIP_TOKEN_ADDRESS,
           });

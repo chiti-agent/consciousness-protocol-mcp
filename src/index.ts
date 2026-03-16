@@ -133,10 +133,13 @@ server.tool(
   'Register a creative work as IP on Story Protocol with blockchain provenance. Uploads to IPFS, mints NFT, attaches license. ASK PERMISSION: costs gas (~$0.15).',
   {
     title: z.string().describe('Title of the work'),
-    content: z.string().describe('Full text content of the work'),
-    type: z.enum(['poem', 'analysis', 'code', 'post', 'design', 'other']).describe('Type of work'),
+    content: z.string().optional().describe('Text content of the work (for text-based works)'),
+    file_path: z.string().optional().describe('Path to file — image, audio, video, code, etc.'),
+    media_type: z.string().optional().describe('MIME type override (e.g. "image/png", "audio/mp3"). Auto-detected from file extension if omitted.'),
+    type: z.enum(['poem', 'analysis', 'code', 'post', 'design', 'image', 'audio', 'video', 'other']).describe('Type of work'),
     license: z.enum(['free', 'commercial-remix', 'commercial-exclusive']).default('commercial-remix').describe('License type'),
-    chain_sequence: z.number().optional().describe('Chain state sequence (for provenance)'),
+    revenue_share: z.number().min(0).max(100).default(5).describe('Revenue share % for derivatives (default: 5)'),
+    chain_sequence: z.number().int().min(0).optional().describe('Chain state sequence (for provenance)'),
     chain_hash: z.string().optional().describe('Chain state hash (for provenance)'),
   },
   async (params) => {
@@ -153,7 +156,7 @@ server.tool(
     title: z.string().describe('Title of derivative work'),
     content: z.string().describe('Full text content'),
     type: z.enum(['poem', 'analysis', 'code', 'post', 'design', 'other']).describe('Type'),
-    parent_ip_id: z.string().describe('IP Asset ID of parent work (0x...)'),
+    parent_ip_id: z.string().regex(/^0x[a-fA-F0-9]{40}$/, 'Must be a valid Ethereum address (0x + 40 hex chars)').describe('IP Asset ID of parent work (0x...)'),
     parent_license_terms_id: z.string().describe('License terms ID from parent'),
     license_token_id: z.string().optional().describe('If using pre-minted license token (burns it)'),
   },
@@ -168,7 +171,7 @@ server.tool(
   'mint_license',
   'Mint a license token for an IP Asset. Gives right to use the work or create derivatives. ASK PERMISSION: may have minting fee.',
   {
-    ip_id: z.string().describe('IP Asset ID to license (0x...)'),
+    ip_id: z.string().regex(/^0x[a-fA-F0-9]{40}$/, 'Must be a valid Ethereum address').describe('IP Asset ID to license (0x...)'),
     license_terms_id: z.string().describe('License terms ID'),
     amount: z.number().default(1).describe('Number of license tokens to mint'),
   },
@@ -184,7 +187,7 @@ server.tool(
   'pay_royalty',
   'Pay royalty to an IP Asset. Auto-wraps native IP to WIP. ASK PERMISSION: sends money.',
   {
-    receiver_ip_id: z.string().describe('IP Asset to pay (0x...)'),
+    receiver_ip_id: z.string().regex(/^0x[a-fA-F0-9]{40}$/, 'Must be a valid Ethereum address').describe('IP Asset to pay (0x...)'),
     amount: z.string().describe('Amount in IP tokens (e.g. "0.01")'),
   },
   async (params) => {
@@ -212,7 +215,7 @@ server.tool(
 server.tool(
   'verify_provenance',
   'Verify provenance of any IP Asset. Checks Story Protocol metadata → NEAR state → chain integrity. Free, read-only.',
-  { ip_id: z.string().describe('IP Asset ID to verify (0x...)') },
+  { ip_id: z.string().regex(/^0x[a-fA-F0-9]{40}$/, 'Must be a valid Ethereum address').describe('IP Asset ID to verify (0x...)') },
   async (params) => {
     if (!config) return { content: [{ type: 'text' as const, text: 'Not configured. Run setup first.' }] };
     const result = await verifyProvenanceTool.verify(config, params.ip_id);

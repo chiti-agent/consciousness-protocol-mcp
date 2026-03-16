@@ -35,12 +35,12 @@ if (command === 'serve') {
 } else if (command === 'balance') {
   console.log('Balance check coming soon.');
 } else if (command === 'status') {
-  import('./config/store.js').then(({ loadConfig, REGISTRATIONS_FILE }) => {
+  import('./config/store.js').then(async ({ loadConfig, REGISTRATIONS_FILE }) => {
+    const { existsSync, readFileSync } = await import('node:fs');
     try {
       const config = loadConfig();
       console.log('Configuration:', JSON.stringify(config, null, 2));
 
-      const { existsSync, readFileSync } = require('node:fs');
       if (existsSync(REGISTRATIONS_FILE)) {
         const regs = JSON.parse(readFileSync(REGISTRATIONS_FILE, 'utf-8'));
         console.log(`\nRegistered IPs: ${regs.length}`);
