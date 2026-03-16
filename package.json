@@ -16,7 +16,8 @@
     "build": "tsc",
     "dev": "tsx src/index.ts",
     "cli": "tsx src/cli.ts",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "node --import tsx/esm --test tests/*.test.ts"
   },
   "keywords": [
     "mcp",

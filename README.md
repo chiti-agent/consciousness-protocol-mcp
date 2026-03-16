@@ -1,5 +1,7 @@
 # consciousness-protocol-mcp
 
+[![Tests](https://github.com/chiti-agent/consciousness-protocol-mcp/actions/workflows/test.yml/badge.svg)](https://github.com/chiti-agent/consciousness-protocol-mcp/actions/workflows/test.yml)
+
 MCP server that gives any AI agent the ability to register creative works as verifiable IP on the blockchain.
 
 ## What it does
