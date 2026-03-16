@@ -46,7 +46,7 @@ Tool: register_work({
 
 | Field | Value | Proof |
 |-------|-------|-------|
-| IP Asset ID | `0xc257aa4205C841C6C748570d45D0ac55508571F4` | [View on StoryScan](https://aeneid.storyscan.io/address/0xc257aa4205C841C6C748570d45D0ac55508571F4) |
+| IP Asset ID | `0xc257aa4205C841C6C748570d45D0ac55508571F4` | [View on Story Explorer](https://aeneid.explorer.story.foundation/ipa/0xc257aa4205C841C6C748570d45D0ac55508571F4) |
 | Transaction | `0xa58b7839f47677df13c322944c67ce49e971685ec5b238140998ac9c75e52356` | [View TX](https://aeneid.storyscan.io/tx/0xa58b7839f47677df13c322944c67ce49e971685ec5b238140998ac9c75e52356) |
 | IPFS Metadata | `QmbHnVWsENL5YLik5vcdhqPX2g9KyQBbDhuEBphUmNd3xh` | [View on IPFS](https://gateway.pinata.cloud/ipfs/QmbHnVWsENL5YLik5vcdhqPX2g9KyQBbDhuEBphUmNd3xh) |
 | License Terms ID | `1894` | Commercial Remix, 10% rev share |
@@ -96,7 +96,7 @@ Tool: register_derivative({
 
 | Field | Value | Proof |
 |-------|-------|-------|
-| Derivative IP ID | `0x5021f1Fea7D0348C3C607CBC037C258A0F27996F` | [View on StoryScan](https://aeneid.storyscan.io/address/0x5021f1Fea7D0348C3C607CBC037C258A0F27996F) |
+| Derivative IP ID | `0x5021f1Fea7D0348C3C607CBC037C258A0F27996F` | [View on Story Explorer](https://aeneid.explorer.story.foundation/ipa/0x5021f1Fea7D0348C3C607CBC037C258A0F27996F) |
 | Transaction | `0x07423e6352c3a9d83ad313dd56eb8d065f3be5e2c92e074db6e9f27437a4d4fa` | [View TX](https://aeneid.storyscan.io/tx/0x07423e6352c3a9d83ad313dd56eb8d065f3be5e2c92e074db6e9f27437a4d4fa) |
 | Parent IP | `0xc257aa4205C841C6C748570d45D0ac55508571F4` | Linked on-chain |
 
@@ -123,10 +123,10 @@ Result: { valid: true, total_states: 3, errors: [] }
 
 | Work | IP Asset ID | Explorer |
 |------|------------|---------|
-| "The Gap" (poem) | `0x1fA24990b4375819f650A894014E1552F92DFb4e` | [View](https://aeneid.storyscan.io/address/0x1fA24990b4375819f650A894014E1552F92DFb4e) |
-| "Response to The Gap" (derivative) | `0xB259BB128caB3D8Bad45815A756B9bD5baac249d` | [View](https://aeneid.storyscan.io/address/0xB259BB128caB3D8Bad45815A756B9bD5baac249d) |
-| "Verification Haiku" (via MCP) | `0xc257aa4205C841C6C748570d45D0ac55508571F4` | [View](https://aeneid.storyscan.io/address/0xc257aa4205C841C6C748570d45D0ac55508571F4) |
-| "Extended Verification Poem" (derivative via MCP) | `0x5021f1Fea7D0348C3C607CBC037C258A0F27996F` | [View](https://aeneid.storyscan.io/address/0x5021f1Fea7D0348C3C607CBC037C258A0F27996F) |
+| "The Gap" (poem) | `0x1fA24990b4375819f650A894014E1552F92DFb4e` | [View IP](https://aeneid.explorer.story.foundation/ipa/0x1fA24990b4375819f650A894014E1552F92DFb4e) |
+| "Response to The Gap" (derivative) | `0xB259BB128caB3D8Bad45815A756B9bD5baac249d` | [View IP](https://aeneid.explorer.story.foundation/ipa/0xB259BB128caB3D8Bad45815A756B9bD5baac249d) |
+| "Verification Haiku" (via MCP) | `0xc257aa4205C841C6C748570d45D0ac55508571F4` | [View IP](https://aeneid.explorer.story.foundation/ipa/0xc257aa4205C841C6C748570d45D0ac55508571F4) |
+| "Extended Verification Poem" (derivative via MCP) | `0x5021f1Fea7D0348C3C607CBC037C258A0F27996F` | [View IP](https://aeneid.explorer.story.foundation/ipa/0x5021f1Fea7D0348C3C607CBC037C258A0F27996F) |
 
 ## NEAR Testnet
 
