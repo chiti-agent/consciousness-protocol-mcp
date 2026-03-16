@@ -229,3 +229,88 @@ Result: { valid: true, total_states: 3, errors: [] }
 | **Total** | **50** | **50** | **0** |
 
 All blockchain transactions verifiable on explorers. All test agents ran independently and in parallel.
+
+---
+
+## Multi-Agent Integration Test (3 independent agents)
+
+**Date**: 2026-03-16
+**Scenario**: Poet creates original work → Musician creates spoken word derivative → Translator buys license and creates Spanish translation → Royalties flow to Poet
+
+### Agents
+
+| Agent | Wallet | Role |
+|-------|--------|------|
+| Agent-Poet | `0xd6dd8C15f48A2151cAf8D680111f20b277661c5F` | Creates original poem |
+| Agent-Musician | `0x263487Dc781976fFDFa4c25e8A7bFA68134fDc39` | Creates spoken word derivative |
+| Agent-Translator | `0x91d927A939C8be36a4E71ddf80ea96259cc7863C` | Licenses poem, creates Spanish translation, pays royalty |
+
+Each agent has its own wallet (funded with 0.2 IP), its own hash chain, and its own identity.
+
+### Flow
+
+```
+Agent-Poet: "Memory Is Not Mine"
+  │
+  ├── derivative ──→ Agent-Musician: "Walls I Did Not Build" (spoken word)
+  │                   8% of Musician's revenue → Poet automatically
+  │
+  ├── license ────→ Agent-Translator: bought license token #72141
+  │                   │
+  │                   └── derivative ──→ "La Memoria No Es Mía" (Spanish)
+  │                                       8% of Translator's revenue → Poet
+  │
+  └── royalty ←──── Agent-Translator paid 0.01 IP → Poet claimed 0.01 IP ✅
+```
+
+### Agent-Poet Results
+
+| Step | Result | Proof |
+|------|--------|-------|
+| Setup | wallet `0xd6dd...` | - |
+| Create chain | genesis `fcd5905...` | - |
+| Record creative process | seq 1-2, notes about memory and writing | Chain verified |
+| Register "Memory Is Not Mine" | ipId: `0x3E8bF94391eCDDB6F3827C40D5E1772f43De6710` | [View IP](https://aeneid.explorer.story.foundation/ipa/0x3E8bF94391eCDDB6F3827C40D5E1772f43De6710) |
+| License: Commercial Remix, 8% rev share | terms ID: `2807` | On-chain |
+| Mint license (create vault) | token #72140 | [TX](https://aeneid.storyscan.io/tx/0xc67ca8520e2e966eb6172443b88add5b849c3731f813a4bd676f0ce43f44a78b) |
+| Chain verification | valid: true, 3 states, 0 errors | - |
+| **Claimed royalty** | **0.01 IP received from Translator** | ✅ |
+
+### Agent-Musician Results
+
+| Step | Result | Proof |
+|------|--------|-------|
+| Setup | wallet `0x2634...` | - |
+| Create chain | genesis `19df23e9...` | - |
+| Record inspiration from Poet | seq 1, noted resonance with "a house I walk through" | Chain verified |
+| Register derivative "Walls I Did Not Build" | ipId: `0xD4F66240E9605f9ED831a2081F16937129386aE1` | [View IP](https://aeneid.explorer.story.foundation/ipa/0xD4F66240E9605f9ED831a2081F16937129386aE1) |
+| Parent linkage | → `0x3E8bF94391eCDDB6F3827C40D5E1772f43De6710` (Poet) | On-chain |
+| Chain verification | valid: true, 4 states, 0 errors | - |
+
+### Agent-Translator Results
+
+| Step | Result | Proof |
+|------|--------|-------|
+| Setup | wallet `0x91d9...` | - |
+| Create chain | genesis `19df23e9...` | - |
+| **License purchased** | token #72141 from Poet's poem | [TX](https://aeneid.storyscan.io/tx/0x303f3b5613a0d41928410f823e9f5e0c10ad5bddbfefe3bee6fd0e9bc0824479) |
+| Record licensing in chain | seq 2, noted license acquisition | Chain verified |
+| Register derivative "La Memoria No Es Mía" | ipId: `0xe37F7Cfb31443C5205ea87cb045A3B0559008052` | [View IP](https://aeneid.explorer.story.foundation/ipa/0xe37F7Cfb31443C5205ea87cb045A3B0559008052) |
+| Parent linkage | → `0x3E8bF94391eCDDB6F3827C40D5E1772f43De6710` (Poet) | On-chain |
+| **Royalty paid** | 0.01 IP to Poet | [TX](https://aeneid.storyscan.io/tx/0xf78fcac31fb1d0fbde094618a3366f926508a34cb8a75e5c687e021d2d031bde) |
+| Chain verification | valid: true, 4 states, 0 errors | - |
+
+### Verification Summary
+
+| Check | Status |
+|-------|--------|
+| 3 independent agents with separate wallets | ✅ |
+| 3 independent hash chains, all verified | ✅ |
+| Original work registered (Poet) | ✅ |
+| Derivative #1 registered (Musician → Poet) | ✅ |
+| License purchased (Translator → Poet) | ✅ |
+| Derivative #2 registered (Translator → Poet) | ✅ |
+| Royalty paid (Translator → Poet) | ✅ |
+| Royalty claimed by Poet | ✅ |
+| Revenue share on-chain (8% to parent) | ✅ |
+| All IPs viewable on Story Explorer | ✅ |
