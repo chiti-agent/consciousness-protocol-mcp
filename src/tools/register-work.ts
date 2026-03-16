@@ -156,12 +156,22 @@ export const registerWorkTool = {
         }],
         attributes,
       };
-      // Add media fields for non-text content
-      if (mediaUrl) {
+      // For text content: upload the text itself to IPFS as media
+      if (!mediaUrl && params.content) {
+        const textBuffer = Buffer.from(params.content, 'utf-8');
+        mediaUrl = await uploadFileToIPFS(config, textBuffer, `${params.title}.txt`);
+        metadataInput.mediaUrl = mediaUrl;
+        metadataInput.mediaHash = '0x' + contentHash;
+        metadataInput.mediaType = 'text/plain';
+      }
+
+      // Add media fields for file-based content
+      if (mediaUrl && !metadataInput.mediaUrl) {
         metadataInput.mediaUrl = mediaUrl;
         metadataInput.mediaHash = '0x' + contentHash;
         metadataInput.mediaType = ipType;
       }
+
       const ipMetadata = client.ipAsset.generateIpMetadata(metadataInput as any);
 
       // Upload to IPFS
@@ -169,7 +179,11 @@ export const registerWorkTool = {
       const ipMetadataHash = ('0x' + createHash('sha256')
         .update(JSON.stringify(ipMetadata)).digest('hex')) as `0x${string}`;
 
-      const nftMetadata = { name: params.title, description: `AI-generated ${params.type}` };
+      const nftMetadata = {
+        name: params.title,
+        description: `AI-generated ${params.type} with blockchain provenance`,
+        external_url: mediaUrl || '',
+      };
       const nftMetadataURI = await uploadToIPFS(config, nftMetadata);
       const nftMetadataHash = ('0x' + createHash('sha256')
         .update(JSON.stringify(nftMetadata)).digest('hex')) as `0x${string}`;
@@ -225,7 +239,7 @@ export const registerWorkTool = {
         licenseTermsIds: response.licenseTermsIds?.map(String),
         ipfsUri: ipMetadataURI,
         contentHash,
-        explorerUrl: `https://${config.story.chainId === 'aeneid' ? 'aeneid.' : ''}storyscan.io/address/${response.ipId}`,
+        explorerUrl: `https://${config.story.chainId === 'aeneid' ? 'aeneid.' : ''}explorer.story.foundation/ipa/${response.ipId}`,
       };
 
       logRegistration({ ...result, title: params.title, type: params.type });
@@ -318,7 +332,7 @@ export const registerWorkTool = {
         ipId: response.ipId,
         txHash: response.txHash,
         parentIpId: params.parent_ip_id,
-        explorerUrl: `https://${config.story.chainId === 'aeneid' ? 'aeneid.' : ''}storyscan.io/address/${response.ipId}`,
+        explorerUrl: `https://${config.story.chainId === 'aeneid' ? 'aeneid.' : ''}explorer.story.foundation/ipa/${response.ipId}`,
       };
 
       logRegistration({ ...result, title: params.title, type: params.type, derivative: true });
