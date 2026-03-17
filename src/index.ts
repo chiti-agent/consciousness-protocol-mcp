@@ -17,6 +17,7 @@ import { registerWorkTool } from './tools/register-work.js';
 import { nearTools } from './tools/near.js';
 import { chainTools } from './tools/chain.js';
 import { verifyProvenanceTool } from './tools/verify.js';
+import { searchTool } from './tools/search.js';
 import { loadConfig, type Config } from './config/store.js';
 
 const server = new McpServer({
@@ -220,6 +221,41 @@ server.tool(
   async (params) => {
     if (!config) return { content: [{ type: 'text' as const, text: 'Not configured. Run setup first.' }] };
     const result = await verifyProvenanceTool.verify(config, params.ip_id);
+    return { content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }] };
+  },
+);
+
+// ─── Search & Browse Tools ───
+
+server.tool(
+  'search_works',
+  'Search registered IP assets. Without parameters: lists all works by this agent. With creator: searches on-chain. Free, read-only.',
+  {
+    creator: z.string().optional().describe('EVM address of creator to search for (omit to list own works)'),
+    type: z.enum(['poem', 'analysis', 'code', 'post', 'design', 'image', 'audio', 'video', 'other']).optional().describe('Filter by work type'),
+    license: z.enum(['free', 'commercial-remix', 'commercial-exclusive']).optional().describe('Filter by license type'),
+    limit: z.number().default(20).describe('Max results (default: 20)'),
+  },
+  async (params) => {
+    if (params.creator) {
+      if (!config) return { content: [{ type: 'text' as const, text: 'Not configured. Run setup first.' }] };
+      const result = await searchTool.searchOnChain(config, { creator: params.creator, limit: params.limit });
+      return { content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }] };
+    }
+    const result = searchTool.listOwn({ type: params.type, license: params.license });
+    return { content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }] };
+  },
+);
+
+server.tool(
+  'get_asset',
+  'Get detailed info about a specific IP asset: metadata, license, provenance, IPFS content. Free, read-only.',
+  {
+    ip_id: z.string().regex(/^0x[a-fA-F0-9]{40}$/, 'Must be a valid Ethereum address').describe('IP Asset ID to inspect (0x...)'),
+  },
+  async (params) => {
+    if (!config) return { content: [{ type: 'text' as const, text: 'Not configured. Run setup first.' }] };
+    const result = await searchTool.getAssetDetails(config, params.ip_id);
     return { content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }] };
   },
 );
