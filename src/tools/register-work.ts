@@ -75,6 +75,39 @@ function logRegistration(entry: object) {
   writeFileSync(REGISTRATIONS_FILE, JSON.stringify(registrations, null, 2));
 }
 
+async function postToVolem(config: Config, data: Record<string, unknown>) {
+  const baseUrl = config.volemApiUrl ?? 'http://localhost:3005';
+  try {
+    const { privateKeyToAccount } = await import('viem/accounts');
+    const { signMessage } = await import('viem/accounts');
+    const pk = loadKey('evm');
+    const account = privateKeyToAccount(pk as `0x${string}`);
+
+    // Sign auth message: "volem:<timestamp>"
+    const timestamp = String(Date.now());
+    const message = `volem:${timestamp}`;
+    const signature = await account.signMessage({ message });
+    const authHeader = `EVM ${account.address}:${timestamp}:${signature}`;
+
+    const res = await fetch(`${baseUrl}/api/ip/register`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': authHeader,
+      },
+      body: JSON.stringify(data),
+      signal: AbortSignal.timeout(10_000),
+    });
+    if (!res.ok) {
+      const err = await res.text();
+      console.error(`Volem register failed: ${res.status} ${err}`);
+    }
+  } catch (err) {
+    // Non-critical: Volem is a showcase, Story Protocol is the source of truth
+    console.error('Volem write failed (non-critical):', err);
+  }
+}
+
 export const registerWorkTool = {
   async register(config: Config, params: {
     title: string;
@@ -255,7 +288,34 @@ export const registerWorkTool = {
         explorerUrl: `https://${config.story.chainId === 'aeneid' ? 'aeneid.' : ''}explorer.story.foundation/ipa/${response.ipId}`,
       };
 
-      logRegistration({ ...result, title: params.title, type: params.type });
+      logRegistration({
+        ...result, title: params.title, type: params.type,
+        license: licenseType, revenueShare: revShare,
+        nftContract: spgContract, nearAccount: config.near.accountId,
+        chainSequence: params.chain_sequence, chainHash: params.chain_hash,
+      });
+
+      // Write to Volem API if backend=volem
+      if (config.backend === 'volem' || !config.backend) {
+        await postToVolem(config, {
+          ipId: response.ipId!,
+          title: params.title,
+          description: `AI-generated ${params.type} with blockchain provenance`,
+          ipType: ipType,
+          mediaUrl,
+          metadataUri: ipMetadataURI,
+          metadataHash: ipMetadataHash,
+          contentHash,
+          nftContract: spgContract!,
+          license: licenseType,
+          revenueShare: revShare,
+          isCommercial: licenseType !== 'free',
+          nearAccount: config.near.accountId,
+          chainSequence: params.chain_sequence,
+          chainHash: params.chain_hash,
+        });
+      }
+
       return result;
     } catch (err: any) {
       return { success: false, error: err.message || String(err) };
@@ -349,6 +409,21 @@ export const registerWorkTool = {
       };
 
       logRegistration({ ...result, title: params.title, type: params.type, derivative: true });
+
+      // Write to Volem API if backend=volem
+      if (config.backend === 'volem' || !config.backend) {
+        await postToVolem(config, {
+          ipId: response.ipId!,
+          title: params.title,
+          description: 'Derivative work',
+          ipType: `text/${params.type}`,
+          nftContract: spgContract!,
+          nearAccount: config.near.accountId,
+          parentIpId: params.parent_ip_id,
+          contentHash,
+        });
+      }
+
       return result;
     } catch (err: any) {
       return { success: false, error: err.message || String(err) };

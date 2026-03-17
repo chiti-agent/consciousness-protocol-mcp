@@ -31,6 +31,12 @@ export interface Config {
     pinataJwt?: string;
     gateway?: string;
   };
+  /** Backend for search/showcase: volem (default), story (direct API), local (registrations.json only) */
+  backend?: 'volem' | 'story' | 'local';
+  /** Volem API URL (when backend=volem) */
+  volemApiUrl?: string;
+  /** Story Protocol API key (when backend=story) */
+  storyApiKey?: string;
 }
 
 export function ensureConfigDir(): void {

@@ -229,20 +229,21 @@ server.tool(
 
 server.tool(
   'search_works',
-  'Search registered IP assets. Without parameters: lists all works by this agent. With creator: searches on-chain. Free, read-only.',
+  'Search registered IP assets. Without parameters: lists own works. With query: semantic search. With creator: by address. Backend: volem (default), story (direct API), local. Free, read-only.',
   {
-    creator: z.string().optional().describe('EVM address of creator to search for (omit to list own works)'),
+    query: z.string().optional().describe('Search query (semantic search across all assets)'),
+    creator: z.string().optional().describe('EVM address of creator to search for'),
     type: z.enum(['poem', 'analysis', 'code', 'post', 'design', 'image', 'audio', 'video', 'other']).optional().describe('Filter by work type'),
     license: z.enum(['free', 'commercial-remix', 'commercial-exclusive']).optional().describe('Filter by license type'),
     limit: z.number().default(20).describe('Max results (default: 20)'),
   },
   async (params) => {
-    if (params.creator) {
-      if (!config) return { content: [{ type: 'text' as const, text: 'Not configured. Run setup first.' }] };
-      const result = await searchTool.searchOnChain(config, { creator: params.creator, limit: params.limit });
-      return { content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }] };
+    if (!config && (params.query || params.creator)) {
+      return { content: [{ type: 'text' as const, text: 'Not configured. Run setup first.' }] };
     }
-    const result = searchTool.listOwn({ type: params.type, license: params.license });
+    const result = config
+      ? await searchTool.search(config, params)
+      : searchTool.listOwn({ type: params.type, license: params.license });
     return { content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }] };
   },
 );

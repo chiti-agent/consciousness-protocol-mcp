@@ -1,9 +1,12 @@
 /**
  * Search and list registered IP assets.
  *
- * Two sources:
- * 1. Local registrations.json — works registered by this agent (fast, complete metadata)
- * 2. Storyscan (Blockscout) API — all works on the SPG NFT contract (slower, needs IPFS fetch)
+ * Three backends:
+ * 1. volem (default) — Volem API for own assets + ecosystem search
+ * 2. story — Story Protocol API v4 for ecosystem-wide search
+ * 3. local — registrations.json only (offline, no external calls)
+ *
+ * Local registrations.json is always checked first as primary source for own works.
  */
 
 import type { Config } from '../config/store.js';
@@ -29,6 +32,7 @@ interface Registration {
 
 interface SearchResult {
   total: number;
+  source: 'local' | 'volem' | 'story';
   works: Array<{
     ipId: string;
     title: string;
@@ -38,7 +42,6 @@ interface SearchResult {
     registeredAt: string;
     explorerUrl: string;
     parentIpId?: string;
-    source: 'local' | 'chain';
   }>;
 }
 
@@ -51,124 +54,205 @@ function loadRegistrations(): Registration[] {
   }
 }
 
-export const searchTool = {
-  /**
-   * List all works registered by this agent (from local registrations.json).
-   */
-  listOwn(filter?: { type?: string; license?: string }): SearchResult {
-    let regs = loadRegistrations();
+function listOwn(filter?: { type?: string; license?: string }): SearchResult {
+  let regs = loadRegistrations();
+  if (filter?.type) regs = regs.filter(r => r.type === filter.type);
+  if (filter?.license) regs = regs.filter(r => r.license === filter.license);
 
-    if (filter?.type) {
-      regs = regs.filter(r => r.type === filter.type);
-    }
-    if (filter?.license) {
-      regs = regs.filter(r => r.license === filter.license);
-    }
+  return {
+    total: regs.length,
+    source: 'local',
+    works: regs.map(r => ({
+      ipId: r.ipId,
+      title: r.title,
+      type: r.type,
+      license: r.license,
+      revenueShare: r.revenueShare,
+      registeredAt: r.registeredAt,
+      explorerUrl: r.explorerUrl,
+      parentIpId: r.parentIpId,
+    })),
+  };
+}
+
+async function searchVolem(
+  config: Config,
+  params: { query?: string; creator?: string; type?: string; limit?: number },
+): Promise<SearchResult> {
+  const baseUrl = config.volemApiUrl ?? 'http://localhost:3005';
+  const searchParams = new URLSearchParams();
+  if (params.query) searchParams.set('q', params.query);
+  if (params.creator) searchParams.set('owner', params.creator);
+  if (params.type) searchParams.set('type', params.type);
+  if (params.limit) searchParams.set('limit', String(params.limit));
+
+  try {
+    const res = await fetch(`${baseUrl}/api/ip/search?${searchParams}`, {
+      signal: AbortSignal.timeout(10_000),
+    });
+    if (!res.ok) return listOwn({ type: params.type }); // fallback to local
+
+    const data = await res.json() as { total: number; assets: Array<{
+      ipId: string; title: string; ipType?: string; license?: string;
+      revenueShare?: number; registeredAt: string; ownerAddress?: string;
+      parentIpId?: string;
+    }> };
 
     return {
-      total: regs.length,
-      works: regs.map(r => ({
-        ipId: r.ipId,
-        title: r.title,
-        type: r.type,
-        license: r.license,
-        revenueShare: r.revenueShare,
-        registeredAt: r.registeredAt,
-        explorerUrl: r.explorerUrl,
-        parentIpId: r.parentIpId,
-        source: 'local' as const,
+      total: data.total,
+      source: 'volem',
+      works: data.assets.map(a => ({
+        ipId: a.ipId,
+        title: a.title,
+        type: a.ipType ?? 'unknown',
+        license: a.license ?? 'unknown',
+        revenueShare: a.revenueShare ?? 0,
+        registeredAt: a.registeredAt,
+        explorerUrl: `${baseUrl}/marketplace/asset/${a.ipId}`,
+        parentIpId: a.parentIpId,
       })),
     };
-  },
+  } catch {
+    return listOwn({ type: params.type }); // fallback to local
+  }
+}
 
-  /**
-   * Search works on Story Protocol via Storyscan (Blockscout) API.
-   * Queries token transfers on the SPG NFT contract.
-   */
-  async searchOnChain(
-    config: Config,
-    params: { creator?: string; limit?: number },
-  ): Promise<SearchResult> {
-    const spgContract = config.story.spgNftContract;
-    if (!spgContract) {
-      return { total: 0, works: [] };
-    }
+async function searchStory(
+  config: Config,
+  params: { query?: string; creator?: string; type?: string; limit?: number },
+): Promise<SearchResult> {
+  const apiKey = config.storyApiKey;
+  if (!apiKey) {
+    return { total: 0, source: 'story', works: [] };
+  }
 
-    const baseUrl = config.story.chainId === 'aeneid'
-      ? 'https://aeneid.storyscan.xyz/api/v2'
-      : 'https://www.storyscan.io/api/v2';
+  const baseUrl = 'https://api.storyapis.com';
 
-    const limit = params.limit ?? 20;
+  try {
+    // Use semantic search if query provided
+    if (params.query) {
+      const res = await fetch(`${baseUrl}/search`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Api-Key': apiKey },
+        body: JSON.stringify({
+          query: params.query,
+          pagination: { limit: params.limit ?? 20, offset: 0 },
+        }),
+        signal: AbortSignal.timeout(15_000),
+      });
+      if (!res.ok) return { total: 0, source: 'story', works: [] };
 
-    // If creator specified, search their token transfers
-    // Otherwise, list recent tokens on the SPG contract
-    const endpoint = params.creator
-      ? `${baseUrl}/addresses/${params.creator}/token-transfers?type=ERC-721&limit=${limit}`
-      : `${baseUrl}/tokens/${spgContract}/transfers?limit=${limit}`;
+      const data = await res.json() as { data?: Array<{
+        id: string; title?: string; description?: string;
+        mediaType?: string; owner?: string;
+      }> };
 
-    try {
-      const res = await fetch(endpoint, { signal: AbortSignal.timeout(15_000) });
-      if (!res.ok) {
-        return { total: 0, works: [] };
-      }
-
-      const data = await res.json() as {
-        items?: Array<{
-          token?: { address?: string };
-          total?: { token_id?: string };
-          to?: { hash?: string };
-          from?: { hash?: string };
-          timestamp?: string;
-        }>;
+      return {
+        total: (data.data ?? []).length,
+        source: 'story',
+        works: (data.data ?? []).map(a => ({
+          ipId: a.id,
+          title: a.title ?? `IP ${a.id.slice(0, 10)}`,
+          type: a.mediaType ?? 'unknown',
+          license: 'unknown',
+          revenueShare: 0,
+          registeredAt: '',
+          explorerUrl: `https://explorer.story.foundation/ipa/${a.id}`,
+        })),
       };
+    }
 
-      const items = data.items ?? [];
-      const works: SearchResult['works'] = [];
+    // Use assets list with owner filter
+    const body: Record<string, unknown> = {
+      orderBy: 'createdAt',
+      orderDirection: 'desc',
+      pagination: { limit: params.limit ?? 20, offset: 0 },
+    };
+    if (params.creator) {
+      body.where = { ownerAddress: params.creator };
+    }
 
-      for (const item of items) {
-        const tokenId = item.total?.token_id;
-        if (!tokenId) continue;
+    const res = await fetch(`${baseUrl}/assets`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Api-Key': apiKey },
+      body: JSON.stringify(body),
+      signal: AbortSignal.timeout(15_000),
+    });
+    if (!res.ok) return { total: 0, source: 'story', works: [] };
 
-        // Try to find in local registrations for metadata
-        const regs = loadRegistrations();
-        const localMatch = regs.find(r => r.tokenId === tokenId);
+    const data = await res.json() as { data?: Array<{
+      id: string; owner?: string;
+    }> };
 
-        const explorerBase = config.story.chainId === 'aeneid'
-          ? 'https://aeneid.explorer.story.foundation/ipa'
-          : 'https://explorer.story.foundation/ipa';
+    return {
+      total: (data.data ?? []).length,
+      source: 'story',
+      works: (data.data ?? []).map(a => ({
+        ipId: a.id,
+        title: `IP ${a.id.slice(0, 10)}`,
+        type: 'unknown',
+        license: 'unknown',
+        revenueShare: 0,
+        registeredAt: '',
+        explorerUrl: `https://explorer.story.foundation/ipa/${a.id}`,
+      })),
+    };
+  } catch {
+    return { total: 0, source: 'story', works: [] };
+  }
+}
 
-        works.push({
-          ipId: localMatch?.ipId ?? `token:${tokenId}`,
-          title: localMatch?.title ?? `IP Asset #${tokenId}`,
-          type: localMatch?.type ?? 'unknown',
-          license: localMatch?.license ?? 'unknown',
-          revenueShare: localMatch?.revenueShare ?? 0,
-          registeredAt: localMatch?.registeredAt ?? item.timestamp ?? '',
-          explorerUrl: localMatch?.explorerUrl ?? `${explorerBase}/${item.to?.hash ?? ''}`,
-          parentIpId: localMatch?.parentIpId,
-          source: localMatch ? 'local' : 'chain',
-        });
-      }
+export const searchTool = {
+  listOwn,
 
-      return { total: works.length, works };
-    } catch (err) {
-      return { total: 0, works: [] };
+  async search(
+    config: Config,
+    params: { query?: string; creator?: string; type?: string; license?: string; limit?: number },
+  ): Promise<SearchResult> {
+    const backend = config.backend ?? 'volem';
+
+    // No query params = list own works (always local)
+    if (!params.query && !params.creator) {
+      return listOwn({ type: params.type, license: params.license });
+    }
+
+    switch (backend) {
+      case 'volem':
+        return searchVolem(config, params);
+      case 'story':
+        return searchStory(config, params);
+      case 'local':
+      default:
+        return listOwn({ type: params.type, license: params.license });
     }
   },
 
-  /**
-   * Get detailed info about a specific IP asset by fetching its IPFS metadata.
-   */
   async getAssetDetails(
     config: Config,
     ipId: string,
   ): Promise<object> {
-    // Check local registrations first
+    const backend = config.backend ?? 'volem';
+
+    // Always check local first
     const regs = loadRegistrations();
     const local = regs.find(r => r.ipId?.toLowerCase() === ipId.toLowerCase());
 
-    let ipfsMetadata: object | null = null;
+    // Try Volem API for full details
+    if (backend === 'volem') {
+      const baseUrl = config.volemApiUrl ?? 'http://localhost:3005';
+      try {
+        const res = await fetch(`${baseUrl}/api/ip/${ipId}`, {
+          signal: AbortSignal.timeout(10_000),
+        });
+        if (res.ok) {
+          const data = await res.json();
+          return { source: 'volem', ...data };
+        }
+      } catch { /* fallback below */ }
+    }
 
+    // Fallback: local + IPFS
+    let ipfsMetadata: object | null = null;
     if (local?.ipfsUri) {
       const gateway = local.ipfsUri.replace('ipfs://', config.ipfs.gateway ?? 'https://gateway.pinata.cloud/ipfs/');
       try {
@@ -178,6 +262,7 @@ export const searchTool = {
     }
 
     return {
+      source: 'local',
       ipId,
       ...(local ? {
         title: local.title,
@@ -191,7 +276,7 @@ export const searchTool = {
         nearAccount: local.nearAccount,
         chainSequence: local.chainSequence,
         chainHash: local.chainHash,
-      } : { note: 'Not found in local registrations. Metadata from IPFS only.' }),
+      } : { note: 'Not found in local registrations.' }),
       ipfsMetadata,
     };
   },
