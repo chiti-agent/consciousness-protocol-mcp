@@ -187,6 +187,12 @@ export const registerWorkTool = {
       if (params.chain_hash) {
         attributes.push({ key: 'chain_hash', value: params.chain_hash });
       }
+      if (params.ip_category) {
+        attributes.push({ key: 'ip_category', value: params.ip_category });
+      }
+      if (params.url) {
+        attributes.push({ key: 'external_url', value: params.url });
+      }
 
       const metadataInput: Record<string, unknown> = {
         title: params.title,
