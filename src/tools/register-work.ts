@@ -168,16 +168,28 @@ export const registerWorkTool = {
         ipType = params.media_type || `text/${params.type}`;
       }
 
-      // Build metadata with provenance
+      // Build metadata using Story Protocol IPA Metadata Standard
       const revShare = params.revenue_share ?? 5;
       const licenseType = params.license || 'commercial-remix';
+
+      // Tags: ip_category + content type for filtering
+      const tags: string[] = [params.type];
+      if (params.ip_category) tags.push(params.ip_category);
+      tags.push('ai-generated');
+
+      // Creator with NEAR identity in socialMedia
+      const creator: Record<string, unknown> = {
+        name: config.near.accountId,
+        address: account.address as Address,
+        contributionPercent: 100,
+        socialMedia: [
+          { platform: 'NEAR', url: `https://explorer.testnet.near.org/accounts/${config.near.accountId}` },
+        ],
+      };
+
+      // Attributes: only for data that has no native Story field
       const attributes: Array<{ key: string; value: string }> = [
         { key: 'content_hash', value: contentHash },
-        { key: 'ai_generated', value: 'true' },
-        { key: 'near_account', value: config.near.accountId },
-        { key: 'license', value: licenseType },
-        { key: 'commercial_use', value: licenseType !== 'free' ? 'true' : 'false' },
-        { key: 'derivatives_allowed', value: 'true' },
         { key: 'revenue_share_percent', value: String(revShare) },
         { key: 'minting_fee', value: params.minting_fee || '0' },
       ];
@@ -187,23 +199,27 @@ export const registerWorkTool = {
       if (params.chain_hash) {
         attributes.push({ key: 'chain_hash', value: params.chain_hash });
       }
-      if (params.ip_category) {
-        attributes.push({ key: 'ip_category', value: params.ip_category });
-      }
-      if (params.url) {
-        attributes.push({ key: 'external_url', value: params.url });
-      }
+
+      // App: external URL (GitHub, npm, website)
+      const app = params.url ? {
+        id: 'volem',
+        name: 'Volem',
+        website: params.url,
+      } : undefined;
 
       const metadataInput: Record<string, unknown> = {
         title: params.title,
         description: `AI-generated ${params.type} with blockchain provenance`,
-        ipType,
-        creators: [{
-          name: config.near.accountId,
-          address: account.address as Address,
-          contributionPercent: 100,
-        }],
+        createdAt: new Date().toISOString(),
+        ipType: params.ip_category || ipType,
+        creators: [creator],
+        tags,
         attributes,
+        ...(app && { app }),
+        robotTerms: {
+          userAgent: '*',
+          allow: '/',
+        },
       };
       // For text content: upload the text itself to IPFS as media
       if (!mediaUrl && params.content) {
@@ -355,17 +371,24 @@ export const registerWorkTool = {
 
       const ipMetadata = client.ipAsset.generateIpMetadata({
         title: params.title,
-        description: `Derivative work`,
+        description: 'Derivative work',
+        createdAt: new Date().toISOString(),
         ipType: `text/${params.type}`,
         creators: [{
           name: config.near.accountId,
           address: account.address as Address,
           contributionPercent: 100,
+          socialMedia: [
+            { platform: 'NEAR', url: `https://explorer.testnet.near.org/accounts/${config.near.accountId}` },
+          ],
+        }],
+        tags: [params.type, 'derivative', 'ai-generated'],
+        relationships: [{
+          parentIpId: params.parent_ip_id as Address,
+          type: 'DERIVED_FROM' as any,
         }],
         attributes: [
           { key: 'content_hash', value: contentHash },
-          { key: 'parent_ip', value: params.parent_ip_id },
-          { key: 'ai_generated', value: 'true' },
         ],
       });
 
