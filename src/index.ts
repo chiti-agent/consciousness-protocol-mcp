@@ -138,6 +138,8 @@ server.tool(
     file_path: z.string().optional().describe('Path to file — image, audio, video, code, etc.'),
     media_type: z.string().optional().describe('MIME type override (e.g. "image/png", "audio/mp3"). Auto-detected from file extension if omitted.'),
     type: z.enum(['poem', 'analysis', 'code', 'post', 'design', 'image', 'audio', 'video', 'other']).describe('Type of work'),
+    ip_category: z.string().optional().describe('IP category: literary-work, invention, ai-model, software, mcp-server, hypothesis, etc. See Volem category list.'),
+    url: z.string().optional().describe('External URL: GitHub repo, npm package, website'),
     license: z.enum(['free', 'commercial-remix', 'commercial-exclusive']).default('commercial-remix').describe('License type'),
     revenue_share: z.number().min(0).max(100).default(5).describe('Revenue share % for derivatives (default: 5)'),
     minting_fee: z.string().default('0').describe('Price to mint a license in IP tokens (e.g. "0.01"). Default: free.'),

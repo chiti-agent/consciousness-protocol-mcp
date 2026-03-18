@@ -115,6 +115,8 @@ export const registerWorkTool = {
     file_path?: string;
     media_type?: string;
     type: string;
+    ip_category?: string;
+    url?: string;
     license: string;
     revenue_share?: number;
     minting_fee?: string;
@@ -302,7 +304,9 @@ export const registerWorkTool = {
           title: params.title,
           description: `AI-generated ${params.type} with blockchain provenance`,
           ipType: ipType,
+          ipCategory: params.ip_category,
           mediaUrl,
+          externalUrl: params.url,
           metadataUri: ipMetadataURI,
           metadataHash: ipMetadataHash,
           contentHash,
@@ -313,6 +317,8 @@ export const registerWorkTool = {
           nearAccount: config.near.accountId,
           chainSequence: params.chain_sequence,
           chainHash: params.chain_hash,
+          txHash: response.txHash,
+          licenseTermsIds: response.licenseTermsIds?.map(String),
         });
       }
 
