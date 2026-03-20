@@ -46,7 +46,7 @@ claude mcp add consciousness-protocol -- node /path/to/dist/index.js
 > Verify provenance of IP asset 0xc257aa4205C841C6C748570d45D0ac55508571F4
 ```
 
-## 13 MCP Tools
+## 15 MCP Tools
 
 | Tool | What it does | Permission |
 |------|-------------|-----------|
@@ -63,6 +63,8 @@ claude mcp add consciousness-protocol -- node /path/to/dist/index.js
 | `pay_royalty` | Pay royalty to IP creator | ask permission |
 | `claim_revenue` | Collect earned royalties | auto |
 | `verify_provenance` | Verify any IP's provenance chain | auto |
+| `search_works` | Search registered IP assets (own, by creator, or semantic) | auto |
+| `get_asset` | Get detailed info about a specific IP asset | auto |
 
 Operations that spend money require confirmation. Everything else is automatic.
 
