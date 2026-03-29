@@ -43,23 +43,85 @@ async function getStoryClient(config: Config) {
   });
 }
 
+/** Get all available Pinata JWT keys (single key + rotation pool) */
+function getPinataKeys(config: Config): string[] {
+  const keys: string[] = [];
+  if (config.ipfs.pinataKeys?.length) keys.push(...config.ipfs.pinataKeys);
+  else if (config.ipfs.pinataJwt) keys.push(config.ipfs.pinataJwt);
+  return keys;
+}
+
+/** Try Pinata upload with key rotation. Returns ipfs:// URI or null if all keys exhausted. */
+async function tryPinataJSON(keys: string[], data: object): Promise<string | null> {
+  for (const jwt of keys) {
+    try {
+      const res = await fetch('https://api.pinata.cloud/pinning/pinJSONToIPFS', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${jwt}`,
+        },
+        body: JSON.stringify({
+          pinataContent: data,
+          pinataMetadata: { name: `cp-${Date.now()}` },
+        }),
+        signal: AbortSignal.timeout(30_000),
+      });
+      if (res.ok) {
+        const result = await res.json() as { IpfsHash: string };
+        return `ipfs://${result.IpfsHash}`;
+      }
+      if (res.status === 403 || res.status === 429) {
+        console.error(`Pinata key exhausted (${res.status}), trying next...`);
+        continue;
+      }
+      throw new Error(`Pinata: ${res.status}`);
+    } catch (err: any) {
+      if (err.message?.includes('Pinata:')) throw err;
+      console.error(`Pinata upload error: ${err.message}, trying next key...`);
+      continue;
+    }
+  }
+  return null;
+}
+
+/** Try Pinata file upload with key rotation. */
+async function tryPinataFile(keys: string[], buffer: Buffer, filename: string): Promise<string | null> {
+  for (const jwt of keys) {
+    try {
+      const formData = new FormData();
+      formData.append('file', new Blob([new Uint8Array(buffer)]), filename);
+      formData.append('pinataMetadata', JSON.stringify({ name: `cp-file-${Date.now()}` }));
+      const res = await fetch('https://api.pinata.cloud/pinning/pinFileToIPFS', {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${jwt}` },
+        body: formData,
+        signal: AbortSignal.timeout(60_000),
+      });
+      if (res.ok) {
+        const result = await res.json() as { IpfsHash: string };
+        return `ipfs://${result.IpfsHash}`;
+      }
+      if (res.status === 403 || res.status === 429) {
+        console.error(`Pinata key exhausted (${res.status}), trying next...`);
+        continue;
+      }
+      throw new Error(`Pinata file upload: ${res.status}`);
+    } catch (err: any) {
+      if (err.message?.includes('Pinata')) throw err;
+      console.error(`Pinata file error: ${err.message}, trying next key...`);
+      continue;
+    }
+  }
+  return null;
+}
+
 async function uploadToIPFS(config: Config, data: object): Promise<string> {
-  if (config.ipfs.pinataJwt) {
-    const res = await fetch('https://api.pinata.cloud/pinning/pinJSONToIPFS', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${config.ipfs.pinataJwt}`,
-      },
-      body: JSON.stringify({
-        pinataContent: data,
-        pinataMetadata: { name: `cp-${Date.now()}` },
-      }),
-      signal: AbortSignal.timeout(30_000), // 30s timeout
-    });
-    if (!res.ok) throw new Error(`Pinata: ${res.status}`);
-    const result = await res.json() as { IpfsHash: string };
-    return `ipfs://${result.IpfsHash}`;
+  const keys = getPinataKeys(config);
+  if (keys.length > 0) {
+    const result = await tryPinataJSON(keys, data);
+    if (result) return result;
+    console.error('All Pinata keys exhausted, falling back to data URI');
   }
   // Fallback: encode as data URI (works for testnet, not production)
   const json = JSON.stringify(data);
@@ -68,20 +130,11 @@ async function uploadToIPFS(config: Config, data: object): Promise<string> {
 }
 
 async function uploadFileToIPFS(config: Config, buffer: Buffer, filename: string): Promise<string> {
-  if (config.ipfs.pinataJwt) {
-    const formData = new FormData();
-    formData.append('file', new Blob([new Uint8Array(buffer)]), filename);
-    formData.append('pinataMetadata', JSON.stringify({ name: `cp-file-${Date.now()}` }));
-
-    const res = await fetch('https://api.pinata.cloud/pinning/pinFileToIPFS', {
-      method: 'POST',
-      headers: { 'Authorization': `Bearer ${config.ipfs.pinataJwt}` },
-      body: formData,
-      signal: AbortSignal.timeout(60_000), // 60s timeout for file upload
-    });
-    if (!res.ok) throw new Error(`Pinata file upload: ${res.status}`);
-    const result = await res.json() as { IpfsHash: string };
-    return `ipfs://${result.IpfsHash}`;
+  const keys = getPinataKeys(config);
+  if (keys.length > 0) {
+    const result = await tryPinataFile(keys, buffer, filename);
+    if (result) return result;
+    console.error('All Pinata keys exhausted for file upload, falling back to data URI');
   }
   const hash = createHash('sha256').update(buffer).digest('hex');
   return `data:application/octet-stream;hash=${hash}`;

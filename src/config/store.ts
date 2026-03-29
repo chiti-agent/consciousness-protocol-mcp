@@ -29,6 +29,7 @@ export interface Config {
   };
   ipfs: {
     pinataJwt?: string;
+    pinataKeys?: string[];   // multiple JWT keys for rotation on 403/rate limit
     gateway?: string;
   };
   /** Backend for search/showcase: volem (default), story (direct API), local (registrations.json only) */
