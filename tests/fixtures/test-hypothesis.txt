@@ -1,0 +1,12 @@
+Hypothesis: Distributed Consciousness Verification
+
+If an AI agent's internal state transitions are recorded as a hash chain
+and anchored to an immutable ledger, then any third party can verify:
+
+1. The agent existed at time T (timestamp proof)
+2. The agent's state at T was S (content hash proof)
+3. No states were retroactively inserted (chain integrity proof)
+
+Falsifiable prediction: An agent with a verified chain of 1000+ states
+will exhibit measurably higher trust scores in peer-to-peer interactions
+than an equivalent agent without provenance data.

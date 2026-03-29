@@ -263,6 +263,24 @@ server.tool(
   },
 );
 
+// ─── Install Skill Tool ───
+
+server.tool(
+  'install_skill',
+  'Install a skill/MCP/workflow from the marketplace. Discovers asset → checks license (auto-mints if needed) → downloads (git clone or IPFS) → installs to ~/.claude/skills/. Complete marketplace cycle in one call.',
+  {
+    ip_id: z.string().regex(/^0x[a-fA-F0-9]{40}$/, 'Must be a valid Ethereum address').describe('IP Asset ID to install (0x...)'),
+    install_path: z.string().optional().describe('Custom install path (default: ~/.claude/skills/{name})'),
+    auto_license: z.boolean().default(true).describe('Automatically mint license if required (default: true). Set false to skip.'),
+  },
+  async (params) => {
+    if (!config) return { content: [{ type: 'text' as const, text: 'Not configured. Run setup first.' }] };
+    const { installSkillTool } = await import('./tools/install-skill.js');
+    const result = await installSkillTool.install(config, params);
+    return { content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }] };
+  },
+);
+
 // ─── Start Server ───
 
 async function main() {

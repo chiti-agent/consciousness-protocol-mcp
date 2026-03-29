@@ -1,0 +1,10 @@
+{
+  "name": "test-mcp-server",
+  "version": "0.1.0",
+  "description": "Test MCP server fixture for integration tests",
+  "main": "index.js",
+  "bin": {
+    "test-mcp-server": "index.js"
+  },
+  "license": "MIT"
+}

@@ -7,17 +7,38 @@ import type { Config } from '../config/store.js';
 import { loadKey, REGISTRATIONS_FILE } from '../config/store.js';
 import { readFileSync, writeFileSync, existsSync } from 'node:fs';
 
+// Lazy-loaded modules — cached after first import
+let _StoryClient: typeof import('@story-protocol/core-sdk').StoryClient;
+let _PILFlavor: typeof import('@story-protocol/core-sdk').PILFlavor;
+let _WIP_TOKEN_ADDRESS: typeof import('@story-protocol/core-sdk').WIP_TOKEN_ADDRESS;
+let _privateKeyToAccount: typeof import('viem/accounts').privateKeyToAccount;
+let _http: typeof import('viem').http;
+let _zeroAddress: typeof import('viem').zeroAddress;
+let _parseEther: typeof import('viem').parseEther;
+
+async function ensureImports() {
+  if (_StoryClient) return;
+  const sdk = await import('@story-protocol/core-sdk');
+  _StoryClient = sdk.StoryClient;
+  _PILFlavor = sdk.PILFlavor;
+  _WIP_TOKEN_ADDRESS = sdk.WIP_TOKEN_ADDRESS;
+  const accounts = await import('viem/accounts');
+  _privateKeyToAccount = accounts.privateKeyToAccount;
+  const viem = await import('viem');
+  _http = viem.http;
+  _zeroAddress = viem.zeroAddress;
+  _parseEther = viem.parseEther;
+}
+
 async function getStoryClient(config: Config) {
-  const { StoryClient } = await import('@story-protocol/core-sdk');
-  const { privateKeyToAccount } = await import('viem/accounts');
-  const { http } = await import('viem');
+  await ensureImports();
 
   const pk = loadKey('evm');
-  const account = privateKeyToAccount(pk as `0x${string}`);
+  const account = _privateKeyToAccount(pk as `0x${string}`);
 
-  return StoryClient.newClient({
+  return _StoryClient.newClient({
     account,
-    transport: http(config.story.rpcUrl),
+    transport: _http(config.story.rpcUrl),
     chainId: config.story.chainId,
   });
 }
@@ -129,13 +150,11 @@ export const registerWorkTool = {
       }
 
       const client = await getStoryClient(config);
-      const { PILFlavor, WIP_TOKEN_ADDRESS } = await import('@story-protocol/core-sdk');
-      const { privateKeyToAccount } = await import('viem/accounts');
-      const { zeroAddress } = await import('viem');
+      await ensureImports();
       type Address = `0x${string}`;
 
       const pk = loadKey('evm');
-      const account = privateKeyToAccount(pk as `0x${string}`);
+      const account = _privateKeyToAccount(pk as `0x${string}`);
 
       // Handle text content or file
       let contentHash: string;
@@ -143,7 +162,6 @@ export const registerWorkTool = {
       let mediaUrl: string | undefined;
 
       if (params.file_path) {
-        const { readFileSync } = await import('node:fs');
         const { extname } = await import('node:path');
         const fileBuffer = readFileSync(params.file_path);
         contentHash = createHash('sha256').update(fileBuffer).digest('hex');
@@ -160,6 +178,17 @@ export const registerWorkTool = {
           '.md': 'text/markdown', '.txt': 'text/plain', '.json': 'application/json',
         };
         ipType = params.media_type || mimeMap[ext] || 'application/octet-stream';
+
+        // Block dangerous file types — archives can contain malware
+        const blockedExtensions = ['.zip', '.tar', '.gz', '.tgz', '.rar', '.7z', '.bz2', '.xz', '.exe', '.msi', '.dmg', '.app', '.bat', '.cmd', '.sh', '.bin'];
+        const blockedMimeTypes = ['application/zip', 'application/x-tar', 'application/gzip', 'application/x-rar-compressed', 'application/x-7z-compressed', 'application/octet-stream', 'application/x-executable', 'application/x-msdos-program'];
+
+        if (blockedExtensions.includes(ext)) {
+          return { success: false, error: `File type "${ext}" is not allowed. Archives and executables cannot be registered as IP. Use a git repo URL or package registry instead.` };
+        }
+        if (blockedMimeTypes.includes(ipType)) {
+          return { success: false, error: `MIME type "${ipType}" is not allowed. Archives and executables cannot be registered as IP. Use a git repo URL or package registry instead.` };
+        }
 
         // Upload file to IPFS
         mediaUrl = await uploadFileToIPFS(config, fileBuffer, params.title + ext);
@@ -239,17 +268,20 @@ export const registerWorkTool = {
 
       const ipMetadata = client.ipAsset.generateIpMetadata(metadataInput as any);
 
-      // Upload to IPFS
-      const ipMetadataURI = await uploadToIPFS(config, ipMetadata);
-      const ipMetadataHash = ('0x' + createHash('sha256')
-        .update(JSON.stringify(ipMetadata)).digest('hex')) as `0x${string}`;
-
+      // Upload metadata to IPFS in parallel
       const nftMetadata = {
         name: params.title,
         description: `AI-generated ${params.type} with blockchain provenance`,
         external_url: mediaUrl || '',
       };
-      const nftMetadataURI = await uploadToIPFS(config, nftMetadata);
+
+      const [ipMetadataURI, nftMetadataURI] = await Promise.all([
+        uploadToIPFS(config, ipMetadata),
+        uploadToIPFS(config, nftMetadata),
+      ]);
+
+      const ipMetadataHash = ('0x' + createHash('sha256')
+        .update(JSON.stringify(ipMetadata)).digest('hex')) as `0x${string}`;
       const nftMetadataHash = ('0x' + createHash('sha256')
         .update(JSON.stringify(nftMetadata)).digest('hex')) as `0x${string}`;
 
@@ -261,7 +293,7 @@ export const registerWorkTool = {
           symbol: 'CPIP',
           isPublicMinting: false,
           mintOpen: true,
-          mintFeeRecipient: zeroAddress,
+          mintFeeRecipient: _zeroAddress,
           contractURI: '',
         });
         spgContract = collection.spgNftContract!;
@@ -272,17 +304,16 @@ export const registerWorkTool = {
       }
 
       // Register IP
-      const { parseEther: toWei } = await import('viem');
       const mintingFee = params.minting_fee && params.minting_fee !== '0'
-        ? toWei(params.minting_fee)
+        ? _parseEther(params.minting_fee)
         : 0n;
 
       const licenseTerms = params.license === 'free'
-        ? PILFlavor.nonCommercialSocialRemixing()
-        : PILFlavor.commercialRemix({
+        ? _PILFlavor.nonCommercialSocialRemixing()
+        : _PILFlavor.commercialRemix({
             commercialRevShare: params.revenue_share ?? 5,
             defaultMintingFee: mintingFee,
-            currency: WIP_TOKEN_ADDRESS,
+            currency: _WIP_TOKEN_ADDRESS,
           });
 
       const response = await client.ipAsset.registerIpAsset({
@@ -360,13 +391,11 @@ export const registerWorkTool = {
   }) {
     try {
       const client = await getStoryClient(config);
-      const { PILFlavor, WIP_TOKEN_ADDRESS } = await import('@story-protocol/core-sdk');
-      const { privateKeyToAccount } = await import('viem/accounts');
-      const { zeroAddress } = await import('viem');
+      await ensureImports();
       type Address = `0x${string}`;
 
       const pk = loadKey('evm');
-      const account = privateKeyToAccount(pk as `0x${string}`);
+      const account = _privateKeyToAccount(pk as `0x${string}`);
       const contentHash = createHash('sha256').update(params.content).digest('hex');
 
       const ipMetadata = client.ipAsset.generateIpMetadata({
@@ -392,11 +421,15 @@ export const registerWorkTool = {
         ],
       });
 
-      const ipMetadataURI = await uploadToIPFS(config, ipMetadata);
+      const nftMetadata = { name: params.title, description: 'Derivative work' };
+
+      const [ipMetadataURI, nftMetadataURI] = await Promise.all([
+        uploadToIPFS(config, ipMetadata),
+        uploadToIPFS(config, nftMetadata),
+      ]);
+
       const ipMetadataHash = ('0x' + createHash('sha256')
         .update(JSON.stringify(ipMetadata)).digest('hex')) as `0x${string}`;
-      const nftMetadata = { name: params.title, description: 'Derivative work' };
-      const nftMetadataURI = await uploadToIPFS(config, nftMetadata);
       const nftMetadataHash = ('0x' + createHash('sha256')
         .update(JSON.stringify(nftMetadata)).digest('hex')) as `0x${string}`;
 
@@ -407,7 +440,7 @@ export const registerWorkTool = {
           symbol: 'CPIP',
           isPublicMinting: false,
           mintOpen: true,
-          mintFeeRecipient: zeroAddress,
+          mintFeeRecipient: _zeroAddress,
           contractURI: '',
         });
         spgContract = collection.spgNftContract!;
@@ -419,10 +452,10 @@ export const registerWorkTool = {
       const response = await client.ipAsset.registerIpAsset({
         nft: { type: 'mint', spgNftContract: spgContract as Address },
         licenseTermsData: [{
-          terms: PILFlavor.commercialRemix({
+          terms: _PILFlavor.commercialRemix({
             commercialRevShare: 5,
             defaultMintingFee: 0n,
-            currency: WIP_TOKEN_ADDRESS,
+            currency: _WIP_TOKEN_ADDRESS,
           }),
         }],
         derivData: {
