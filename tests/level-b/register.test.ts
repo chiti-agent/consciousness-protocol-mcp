@@ -126,18 +126,19 @@ describe('register_work — 9 asset types', { timeout: 600_000 }, () => {
     };
   });
 
-  // --- 4. MCP server .tgz (mcp-maker, commercial-remix) ---
-  it('registers MCP server from tgz', { timeout: 90_000 }, async () => {
+  // --- 4. MCP server via npm URL (mcp-maker, commercial-remix) ---
+  // Note: .tgz registration blocked for security (2026-03-23). Using npm URL instead.
+  it('registers MCP server by npm URL', { timeout: 90_000 }, async () => {
     const agent: TestAgentName = 'test-mcp-maker';
     activateTestWallet(agent);
     const config = loadTestConfig(agent);
-    const filePath = fixturePath('test-mcp-server-0.1.0.tgz');
 
     const result = await registerWorkTool.register(config, {
       title: 'test-mcp-server',
-      file_path: filePath,
+      content: '// MCP server stub for testing\nconsole.log("hello from MCP");',
       type: 'code',
       ip_category: 'mcp-server',
+      url: 'https://www.npmjs.com/package/@anthropic-ai/claude-code',
       license: 'commercial-remix',
       revenue_share: 5,
       chain_sequence: 1,
@@ -147,7 +148,7 @@ describe('register_work — 9 asset types', { timeout: 600_000 }, () => {
     assert.equal(result.success, true, `Register failed: ${result.error}`);
     assert.ok(result.ipId);
 
-    registeredAssets['mcp-tgz'] = {
+    registeredAssets['mcp-npm'] = {
       ipId: result.ipId!,
       contentHash: result.contentHash!,
       licenseTermsIds: result.licenseTermsIds,
@@ -242,7 +243,7 @@ describe('register_work — 9 asset types', { timeout: 600_000 }, () => {
     };
   });
 
-  // --- 8. PDF patent (inventor, commercial-exclusive + 0.05 WIP fee) ---
+  // --- 8. PDF patent (inventor, commercial-exclusive + 0.005 WIP fee) ---
   it('registers PDF patent', { timeout: 90_000 }, async () => {
     const agent: TestAgentName = 'test-inventor';
     activateTestWallet(agent);
@@ -256,7 +257,7 @@ describe('register_work — 9 asset types', { timeout: 600_000 }, () => {
       type: 'patent',
       ip_category: 'invention',
       license: 'commercial-exclusive',
-      minting_fee: '0.05',
+      minting_fee: '0.005',
       chain_sequence: 1,
       chain_hash: createHash('sha256').update('test-chain-8').digest('hex'),
     });
