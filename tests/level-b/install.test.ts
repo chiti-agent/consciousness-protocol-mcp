@@ -1,6 +1,6 @@
 /**
  * Level B — install_skill integration tests.
- * Tests git clone, IPFS zip, IPFS tgz, npm, text content, error cases.
+ * Tests git clone, npm, text content, error cases. Archives (zip/tgz) blocked for security.
  * Depends on register.test.ts for ipIds of registered assets.
  */
 
@@ -65,36 +65,7 @@ describe('install_skill', { timeout: 300_000 }, () => {
     }
   });
 
-  // --- Install from IPFS tgz ---
-  it('installs from IPFS tgz (simulated via local asset)', { timeout: 60_000 }, async () => {
-    const agent: TestAgentName = 'test-buyer';
-    activateTestWallet(agent);
-    const config = loadTestConfig(agent);
-
-    const mcp = registeredAssets['mcp-tgz'];
-    if (!mcp?.ipId) {
-      console.log('  SKIP: mcp-tgz not registered');
-      return;
-    }
-
-    const installPath = join(INSTALL_BASE, 'mcp-tgz');
-    const result = await installSkillTool.install(config, {
-      ip_id: mcp.ipId,
-      install_path: installPath,
-    });
-
-    if (result.success) {
-      assert.ok(result.installPath);
-      // tgz extraction should have produced package.json
-      const hasPackageJson = existsSync(join(result.installPath!, 'package.json'))
-        || existsSync(join(result.installPath!, 'package', 'package.json'));
-      assert.ok(hasPackageJson || existsSync(join(result.installPath!, 'SKILL.md')),
-        'Must have package.json or SKILL.md after tgz extraction');
-    } else {
-      // IPFS fetch might fail in test environment
-      assert.ok(result.error);
-    }
-  });
+  // --- tgz test removed: archives blocked for security (2026-03-23) ---
 
   // --- Install npm package ---
   it('installs npm package by name', { timeout: 120_000 }, async () => {
