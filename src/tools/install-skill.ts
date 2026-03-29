@@ -144,6 +144,23 @@ export const installSkillTool = {
   ): Promise<InstallResult> {
     const { ip_id, auto_license = true } = params;
 
+    // 0. Quick check: already installed?
+    const earlySlug = slugify(`skill-${ip_id.slice(2, 12)}`);
+    const earlyPath = params.install_path ?? join(SKILLS_DIR, earlySlug);
+    if (existsSync(earlyPath)) {
+      const hasSkillMd = existsSync(join(earlyPath, 'SKILL.md'));
+      const hasPkgJson = existsSync(join(earlyPath, 'package.json'));
+      if (hasSkillMd || hasPkgJson) {
+        return {
+          success: true,
+          ipId: ip_id,
+          title: earlySlug,
+          installPath: earlyPath,
+          instructions: `Already installed at ${earlyPath}. Delete the directory to reinstall.`,
+        };
+      }
+    }
+
     // 1. Get asset details
     let asset: Record<string, any>;
     try {
