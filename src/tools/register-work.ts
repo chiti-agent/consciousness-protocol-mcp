@@ -118,26 +118,22 @@ async function tryPinataFile(keys: string[], buffer: Buffer, filename: string): 
 
 async function uploadToIPFS(config: Config, data: object): Promise<string> {
   const keys = getPinataKeys(config);
-  if (keys.length > 0) {
-    const result = await tryPinataJSON(keys, data);
-    if (result) return result;
-    console.error('All Pinata keys exhausted, falling back to data URI');
+  if (keys.length === 0) {
+    throw new Error('No IPFS upload keys configured. Add pinataKeys or pinataJwt to your config. Your file was NOT uploaded.');
   }
-  // Fallback: encode as data URI (works for testnet, not production)
-  const json = JSON.stringify(data);
-  const hash = createHash('sha256').update(json).digest('hex');
-  return `data:application/json;hash=${hash}`;
+  const result = await tryPinataJSON(keys, data);
+  if (result) return result;
+  throw new Error('All Pinata keys exhausted (blocked or rate limited). Your file was NOT uploaded to IPFS. Add fresh keys to pinataKeys in config.');
 }
 
 async function uploadFileToIPFS(config: Config, buffer: Buffer, filename: string): Promise<string> {
   const keys = getPinataKeys(config);
-  if (keys.length > 0) {
-    const result = await tryPinataFile(keys, buffer, filename);
-    if (result) return result;
-    console.error('All Pinata keys exhausted for file upload, falling back to data URI');
+  if (keys.length === 0) {
+    throw new Error('No IPFS upload keys configured. Add pinataKeys or pinataJwt to your config. Your file was NOT uploaded.');
   }
-  const hash = createHash('sha256').update(buffer).digest('hex');
-  return `data:application/octet-stream;hash=${hash}`;
+  const result = await tryPinataFile(keys, buffer, filename);
+  if (result) return result;
+  throw new Error('All Pinata keys exhausted (blocked or rate limited). Your file was NOT uploaded to IPFS. Add fresh keys to pinataKeys in config.');
 }
 
 function logRegistration(entry: object) {
