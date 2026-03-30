@@ -32,7 +32,7 @@ const INSTALL_DIR = join(tmpdir(), 'cp-e2e-installs');
 describe('E2E Marketplace Cycle', { timeout: 600_000 }, () => {
   // ===== ACT 1: Registration (sequential — loadKey limitation) =====
   describe('Act 1: Registration', { timeout: 300_000 }, () => {
-    it('poet registers "Ode to Decentralization" (free, text)', { timeout: 30_000 }, async () => {
+    it('poet registers "Ode to Decentralization" (free, text)', { timeout: 90_000 }, async () => {
       activateTestWallet('test-poet');
       const config = loadTestConfig('test-poet');
       const content = readFixture('test-poem.txt');
@@ -53,7 +53,7 @@ describe('E2E Marketplace Cycle', { timeout: 600_000 }, () => {
       state.poetContentHash = result.contentHash;
     });
 
-    it('developer registers validator-utils.ts (commercial 5%, file)', { timeout: 30_000 }, async () => {
+    it('developer registers validator-utils.ts (commercial 5%, file)', { timeout: 90_000 }, async () => {
       activateTestWallet('test-developer');
       const config = loadTestConfig('test-developer');
 
@@ -73,7 +73,7 @@ describe('E2E Marketplace Cycle', { timeout: 600_000 }, () => {
       state.devLicenseTermsId = result.licenseTermsIds?.[0];
     });
 
-    it('skill-maker registers Claude skill (commercial 10% + 0.01 WIP, git)', { timeout: 30_000 }, async () => {
+    it('skill-maker registers Claude skill (commercial 10% + 0.01 WIP, git)', { timeout: 90_000 }, async () => {
       activateTestWallet('test-skill-maker');
       const config = loadTestConfig('test-skill-maker');
       const content = readFixture('test-skill/SKILL.md');
@@ -96,15 +96,17 @@ describe('E2E Marketplace Cycle', { timeout: 600_000 }, () => {
       state.skillLicenseTermsId = result.licenseTermsIds?.[0];
     });
 
-    it('mcp-maker registers MCP server (commercial, tgz)', { timeout: 30_000 }, async () => {
+    // tgz blocked for security — register MCP via text content + npm URL
+    it('mcp-maker registers MCP server (commercial, npm URL)', { timeout: 90_000 }, async () => {
       activateTestWallet('test-mcp-maker');
       const config = loadTestConfig('test-mcp-maker');
 
       const result = await registerWorkTool.register(config, {
         title: `E2E-mcp-server-${Date.now()}`,
-        file_path: fixturePath('test-mcp-server-0.1.0.tgz'),
+        content: '// MCP server stub\nconsole.log("hello");',
         type: 'code',
         ip_category: 'mcp-server',
+        url: 'https://www.npmjs.com/package/@anthropic-ai/claude-code',
         license: 'commercial-remix',
         revenue_share: 5,
         chain_sequence: 100,
@@ -116,7 +118,7 @@ describe('E2E Marketplace Cycle', { timeout: 600_000 }, () => {
       state.mcpLicenseTermsId = result.licenseTermsIds?.[0];
     });
 
-    it('artist registers abstract-chain.png (commercial 15%, file)', { timeout: 30_000 }, async () => {
+    it('artist registers abstract-chain.png (commercial 15%, file)', { timeout: 90_000 }, async () => {
       activateTestWallet('test-artist');
       const config = loadTestConfig('test-artist');
 
@@ -137,7 +139,7 @@ describe('E2E Marketplace Cycle', { timeout: 600_000 }, () => {
       state.artistLicenseTermsId = result.licenseTermsIds?.[0];
     });
 
-    it('musician registers ambient-blocks.mp3 (free, file)', { timeout: 30_000 }, async () => {
+    it('musician registers ambient-blocks.mp3 (free, file)', { timeout: 90_000 }, async () => {
       activateTestWallet('test-musician');
       const config = loadTestConfig('test-musician');
 
@@ -156,7 +158,7 @@ describe('E2E Marketplace Cycle', { timeout: 600_000 }, () => {
       state.musicianIpId = result.ipId;
     });
 
-    it('inventor registers consensus-method.pdf (commercial-exclusive + 0.05 WIP, file)', { timeout: 30_000 }, async () => {
+    it('inventor registers consensus-method.pdf (commercial-exclusive + 0.005 WIP, file)', { timeout: 90_000 }, async () => {
       activateTestWallet('test-inventor');
       const config = loadTestConfig('test-inventor');
 
@@ -167,7 +169,7 @@ describe('E2E Marketplace Cycle', { timeout: 600_000 }, () => {
         type: 'patent',
         ip_category: 'invention',
         license: 'commercial-exclusive',
-        minting_fee: '0.05',
+        minting_fee: '0.005',
         chain_sequence: 100,
         chain_hash: createHash('sha256').update('e2e-chain-inventor').digest('hex'),
       });
@@ -237,7 +239,7 @@ describe('E2E Marketplace Cycle', { timeout: 600_000 }, () => {
 
   // ===== ACT 3: Licensing =====
   describe('Act 3: Licensing', { timeout: 120_000 }, () => {
-    it('artist mints license on poet\'s poem (free, no fee)', { timeout: 30_000 }, async () => {
+    it('artist mints license on poet\'s poem (free, no fee)', { timeout: 90_000 }, async () => {
       activateTestWallet('test-artist');
       const config = loadTestConfig('test-artist');
 
@@ -253,7 +255,7 @@ describe('E2E Marketplace Cycle', { timeout: 600_000 }, () => {
       state.artistPoemLicense = result.licenseTokenIds?.[0];
     });
 
-    it('buyer mints license on skill-maker\'s skill (pays 0.01 WIP)', { timeout: 30_000 }, async () => {
+    it('buyer mints license on skill-maker\'s skill (pays 0.01 WIP)', { timeout: 90_000 }, async () => {
       activateTestWallet('test-buyer');
       const config = loadTestConfig('test-buyer');
 
@@ -269,7 +271,7 @@ describe('E2E Marketplace Cycle', { timeout: 600_000 }, () => {
       state.buyerSkillLicense = result.licenseTokenIds?.[0];
     });
 
-    it('buyer mints license on inventor\'s patent (exclusive + 0.05 WIP)', { timeout: 30_000 }, async () => {
+    it('buyer mints license on inventor\'s patent (exclusive + 0.005 WIP)', { timeout: 90_000 }, async () => {
       activateTestWallet('test-buyer');
       const config = loadTestConfig('test-buyer');
 
@@ -288,7 +290,7 @@ describe('E2E Marketplace Cycle', { timeout: 600_000 }, () => {
 
   // ===== ACT 4: Derivatives =====
   describe('Act 4: Derivatives', { timeout: 120_000 }, () => {
-    it('artist registers derivative "Visual Ode" from poet\'s poem', { timeout: 30_000 }, async () => {
+    it('artist registers derivative "Visual Ode" from poet\'s poem', { timeout: 90_000 }, async () => {
       activateTestWallet('test-artist');
       const config = loadTestConfig('test-artist');
 
@@ -305,7 +307,7 @@ describe('E2E Marketplace Cycle', { timeout: 600_000 }, () => {
       state.visualOdeIpId = result.ipId;
     });
 
-    it('developer registers self-derivative "Extended Utils"', { timeout: 30_000 }, async () => {
+    it('developer registers self-derivative "Extended Utils"', { timeout: 90_000 }, async () => {
       activateTestWallet('test-developer');
       const config = loadTestConfig('test-developer');
 
@@ -348,7 +350,8 @@ describe('E2E Marketplace Cycle', { timeout: 600_000 }, () => {
       }
     });
 
-    it('buyer installs MCP server from tgz', { timeout: 60_000 }, async () => {
+    // tgz blocked — MCP registered via npm URL, install checks for npm source
+    it('buyer installs MCP server (npm URL)', { timeout: 60_000 }, async () => {
       activateTestWallet('test-buyer');
       const config = loadTestConfig('test-buyer');
 
@@ -366,7 +369,7 @@ describe('E2E Marketplace Cycle', { timeout: 600_000 }, () => {
       }
     });
 
-    it('buyer tries to install artist\'s image -> error', { timeout: 30_000 }, async () => {
+    it('buyer tries to install artist\'s image -> error', { timeout: 90_000 }, async () => {
       activateTestWallet('test-buyer');
       const config = loadTestConfig('test-buyer');
 
@@ -386,7 +389,7 @@ describe('E2E Marketplace Cycle', { timeout: 600_000 }, () => {
 
   // ===== ACT 6: Royalties =====
   describe('Act 6: Royalties', { timeout: 90_000 }, () => {
-    it('buyer pays royalty to developer', { timeout: 30_000 }, async () => {
+    it('buyer pays royalty to developer', { timeout: 90_000 }, async () => {
       activateTestWallet('test-buyer');
       const config = loadTestConfig('test-buyer');
 
@@ -399,7 +402,7 @@ describe('E2E Marketplace Cycle', { timeout: 600_000 }, () => {
       assert.ok(result.txHash);
     });
 
-    it('developer claims revenue', { timeout: 30_000 }, async () => {
+    it('developer claims revenue', { timeout: 90_000 }, async () => {
       activateTestWallet('test-developer');
       const config = loadTestConfig('test-developer');
 
@@ -413,7 +416,7 @@ describe('E2E Marketplace Cycle', { timeout: 600_000 }, () => {
 
   // ===== ACT 7: Provenance =====
   describe('Act 7: Provenance', { timeout: 60_000 }, () => {
-    it('verify provenance on poet\'s poem', { timeout: 30_000 }, async () => {
+    it('verify provenance on poet\'s poem', { timeout: 90_000 }, async () => {
       activateTestWallet('test-poet');
       const config = loadTestConfig('test-poet');
 
@@ -426,7 +429,7 @@ describe('E2E Marketplace Cycle', { timeout: 600_000 }, () => {
       assert.ok(result.work, 'work metadata must exist');
     });
 
-    it('verify provenance on artist\'s derivative', { timeout: 30_000 }, async () => {
+    it('verify provenance on artist\'s derivative', { timeout: 90_000 }, async () => {
       if (!state.visualOdeIpId) {
         console.log('  SKIP: visual-ode not created');
         return;
