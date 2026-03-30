@@ -119,21 +119,21 @@ async function tryPinataFile(keys: string[], buffer: Buffer, filename: string): 
 async function uploadToIPFS(config: Config, data: object): Promise<string> {
   const keys = getPinataKeys(config);
   if (keys.length === 0) {
-    throw new Error('No IPFS upload keys configured. Add pinataKeys or pinataJwt to your config. Your file was NOT uploaded.');
+    throw new Error('File storage service is not configured. Please contact the administrator to set up IPFS upload credentials.');
   }
   const result = await tryPinataJSON(keys, data);
   if (result) return result;
-  throw new Error('All Pinata keys exhausted (blocked or rate limited). Your file was NOT uploaded to IPFS. Add fresh keys to pinataKeys in config.');
+  throw new Error('File storage service is temporarily unavailable or overloaded. Your file was not uploaded. Please try again later.');
 }
 
 async function uploadFileToIPFS(config: Config, buffer: Buffer, filename: string): Promise<string> {
   const keys = getPinataKeys(config);
   if (keys.length === 0) {
-    throw new Error('No IPFS upload keys configured. Add pinataKeys or pinataJwt to your config. Your file was NOT uploaded.');
+    throw new Error('File storage service is not configured. Please contact the administrator to set up IPFS upload credentials.');
   }
   const result = await tryPinataFile(keys, buffer, filename);
   if (result) return result;
-  throw new Error('All Pinata keys exhausted (blocked or rate limited). Your file was NOT uploaded to IPFS. Add fresh keys to pinataKeys in config.');
+  throw new Error('File storage service is temporarily unavailable or overloaded. Your file was not uploaded. Please try again later.');
 }
 
 function logRegistration(entry: object) {
