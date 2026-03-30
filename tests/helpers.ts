@@ -50,8 +50,10 @@ export function getTestWallet(agentName: TestAgentName): { address: string; priv
 export function loadTestConfig(agentName: TestAgentName): Config {
   const wallet = getTestWallet(agentName);
 
-  // Read Pinata JWT from the main config if available, or from env
-  const pinataJwt = process.env.PINATA_JWT ?? readPinataJwtFromConfig();
+  // Read Pinata keys from main config. Set SKIP_PINATA=1 to disable IPFS upload.
+  const { pinataJwt, pinataKeys } = process.env.SKIP_PINATA
+    ? { pinataJwt: undefined, pinataKeys: undefined }
+    : readPinataFromConfig();
 
   return {
     network: 'testnet',
@@ -66,6 +68,7 @@ export function loadTestConfig(agentName: TestAgentName): Config {
     },
     ipfs: {
       pinataJwt,
+      pinataKeys,
       gateway: IPFS_GATEWAY,
     },
     backend: 'volem',
@@ -77,13 +80,16 @@ export function loadTestConfig(agentName: TestAgentName): Config {
  * Try to read Pinata JWT from the main config file (for convenience).
  * Returns undefined if not found — tests requiring IPFS will skip.
  */
-function readPinataJwtFromConfig(): string | undefined {
+function readPinataFromConfig(): { pinataJwt?: string; pinataKeys?: string[] } {
   try {
     const configPath = join(homedir(), '.consciousness-protocol', 'config.json');
     const config = JSON.parse(readFileSync(configPath, 'utf-8'));
-    return config.ipfs?.pinataJwt;
+    return {
+      pinataJwt: config.ipfs?.pinataJwt,
+      pinataKeys: config.ipfs?.pinataKeys,
+    };
   } catch {
-    return undefined;
+    return {};
   }
 }
 
