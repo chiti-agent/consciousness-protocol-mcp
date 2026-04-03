@@ -71,13 +71,15 @@ async function tryPinataJSON(keys: string[], data: object): Promise<string | nul
         const result = await res.json() as { IpfsHash: string };
         return `ipfs://${result.IpfsHash}`;
       }
-      if (res.status === 403 || res.status === 429) {
+      if (res.status === 401 || res.status === 403 || res.status === 429) {
         console.error(`Pinata key exhausted (${res.status}), trying next...`);
         continue;
       }
-      throw new Error(`Pinata: ${res.status}`);
+      // Other HTTP errors (5xx, etc.) — rotate to next key
+      console.error(`Pinata HTTP error (${res.status}), trying next key...`);
+      continue;
     } catch (err: any) {
-      if (err.message?.includes('Pinata:')) throw err;
+      // Non-HTTP errors (network, timeout, etc.) — rotate to next key
       console.error(`Pinata upload error: ${err.message}, trying next key...`);
       continue;
     }
@@ -102,13 +104,15 @@ async function tryPinataFile(keys: string[], buffer: Buffer, filename: string): 
         const result = await res.json() as { IpfsHash: string };
         return `ipfs://${result.IpfsHash}`;
       }
-      if (res.status === 403 || res.status === 429) {
+      if (res.status === 401 || res.status === 403 || res.status === 429) {
         console.error(`Pinata key exhausted (${res.status}), trying next...`);
         continue;
       }
-      throw new Error(`Pinata file upload: ${res.status}`);
+      // Other HTTP errors — rotate to next key
+      console.error(`Pinata file HTTP error (${res.status}), trying next key...`);
+      continue;
     } catch (err: any) {
-      if (err.message?.includes('Pinata')) throw err;
+      // Non-HTTP errors (network, timeout, etc.) — rotate to next key
       console.error(`Pinata file error: ${err.message}, trying next key...`);
       continue;
     }
@@ -146,7 +150,7 @@ function logRegistration(entry: object) {
 }
 
 async function postToVolem(config: Config, data: Record<string, unknown>) {
-  const baseUrl = config.volemApiUrl ?? 'http://localhost:3005';
+  const baseUrl = config.volemApiUrl ?? 'http://localhost:3010';
   try {
     const { privateKeyToAccount } = await import('viem/accounts');
     const { signMessage } = await import('viem/accounts');
@@ -244,6 +248,12 @@ export const registerWorkTool = {
       } else {
         contentHash = createHash('sha256').update(params.content!).digest('hex');
         ipType = params.media_type || `text/${params.type}`;
+
+        // Block dangerous MIME types even when content is provided as string
+        const blockedMimeTypes = ['application/zip', 'application/x-tar', 'application/gzip', 'application/x-rar-compressed', 'application/x-7z-compressed', 'application/octet-stream', 'application/x-executable', 'application/x-msdos-program'];
+        if (blockedMimeTypes.some(blocked => ipType.startsWith(blocked))) {
+          return { success: false, error: `MIME type "${ipType}" is not allowed. Archives and executables cannot be registered as IP.` };
+        }
       }
 
       // Build metadata using Story Protocol IPA Metadata Standard
@@ -334,8 +344,10 @@ export const registerWorkTool = {
       const nftMetadataHash = ('0x' + createHash('sha256')
         .update(JSON.stringify(nftMetadata)).digest('hex')) as `0x${string}`;
 
-      // Create SPG collection if needed
-      let spgContract = config.story.spgNftContract;
+      // Re-read config from disk to avoid stale in-memory spgNftContract
+      const { loadConfig: reloadConfig } = await import('../config/store.js');
+      const freshConfig = reloadConfig();
+      let spgContract = freshConfig.story.spgNftContract;
       if (!spgContract) {
         const collection = await client.nftClient.createNFTCollection({
           name: `${config.near.accountId} Works`,
@@ -346,10 +358,10 @@ export const registerWorkTool = {
           contractURI: '',
         });
         spgContract = collection.spgNftContract!;
-        // Save for reuse
-        config.story.spgNftContract = spgContract;
+        // Save to disk via freshConfig — do NOT mutate the shared in-memory config object
+        freshConfig.story.spgNftContract = spgContract;
         const { saveConfig } = await import('../config/store.js');
-        saveConfig(config);
+        saveConfig(freshConfig);
       }
 
       // Register IP
@@ -359,27 +371,19 @@ export const registerWorkTool = {
 
       const licenseTerms = params.license === 'free'
         ? _PILFlavor.nonCommercialSocialRemixing()
-        : _PILFlavor.commercialRemix({
-            commercialRevShare: params.revenue_share ?? 5,
-            defaultMintingFee: mintingFee,
-            currency: _WIP_TOKEN_ADDRESS,
-          });
+        : params.license === 'commercial-exclusive'
+          ? _PILFlavor.commercialUse({ defaultMintingFee: mintingFee, currency: _WIP_TOKEN_ADDRESS })
+          : _PILFlavor.commercialRemix({
+              commercialRevShare: params.revenue_share ?? 5,
+              defaultMintingFee: mintingFee,
+              currency: _WIP_TOKEN_ADDRESS,
+            });
 
       const response = await client.ipAsset.registerIpAsset({
         nft: { type: 'mint', spgNftContract: spgContract as Address },
         licenseTermsData: [{ terms: licenseTerms }],
         ipMetadata: { ipMetadataURI, ipMetadataHash, nftMetadataURI, nftMetadataHash },
       });
-
-      // Mint license token to create vault
-      if (response.licenseTermsIds?.[0]) {
-        await client.license.mintLicenseTokens({
-          licenseTermsId: response.licenseTermsIds[0],
-          licensorIpId: response.ipId! as Address,
-          amount: 1,
-          receiver: account.address as Address,
-        });
-      }
 
       const result = {
         success: true,
@@ -416,6 +420,7 @@ export const registerWorkTool = {
           license: licenseType,
           revenueShare: revShare,
           isCommercial: licenseType !== 'free',
+          mintingFee: params.minting_fee || '0',
           nearAccount: config.near.accountId,
           chainSequence: params.chain_sequence,
           chainHash: params.chain_hash,
@@ -435,13 +440,90 @@ export const registerWorkTool = {
     content: string;
     type: string;
     parent_ip_id: string;
-    parent_license_terms_id: string;
+    parent_license_terms_id?: string;
     license_token_id?: string;
+    revenue_share?: number;
   }) {
     try {
       const client = await getStoryClient(config);
       await ensureImports();
       type Address = `0x${string}`;
+
+      // Auto-resolve: if neither terms ID nor token ID provided, find and mint automatically
+      if (!params.parent_license_terms_id && !params.license_token_id) {
+        console.log('Auto-resolving license for parent IP:', params.parent_ip_id);
+
+        // Find parent's license terms on-chain via LicenseRegistry
+        let termsId: string | null = null;
+        const { createPublicClient } = await import('viem');
+        const publicClient = createPublicClient({
+          transport: _http(config.story.rpcUrl),
+        });
+
+        const LICENSE_REGISTRY = '0x529a750E02d8E2f15649c13D69a465286a780e24' as Address;
+        const termsCount = await publicClient.readContract({
+          address: LICENSE_REGISTRY,
+          abi: [{
+            type: 'function',
+            name: 'getAttachedLicenseTermsCount',
+            inputs: [{ name: 'ipId', type: 'address' }],
+            outputs: [{ name: '', type: 'uint256' }],
+            stateMutability: 'view',
+          }],
+          functionName: 'getAttachedLicenseTermsCount',
+          args: [params.parent_ip_id as Address],
+        });
+
+        if (termsCount > 0n) {
+          const [, licenseTermsId] = await publicClient.readContract({
+            address: LICENSE_REGISTRY,
+            abi: [{
+              type: 'function',
+              name: 'getAttachedLicenseTerms',
+              inputs: [
+                { name: 'ipId', type: 'address' },
+                { name: 'index', type: 'uint256' },
+              ],
+              outputs: [
+                { name: 'licenseTemplate', type: 'address' },
+                { name: 'licenseTermsId', type: 'uint256' },
+              ],
+              stateMutability: 'view',
+            }],
+            functionName: 'getAttachedLicenseTerms',
+            args: [params.parent_ip_id as Address, 0n],
+          });
+          termsId = String(licenseTermsId);
+        }
+
+        if (!termsId) {
+          return { success: false, error: `Could not find license terms for parent IP ${params.parent_ip_id}. The parent must have license terms attached.` };
+        }
+
+        console.log('Found license terms ID:', termsId, '— minting token...');
+
+        // Auto-mint license token
+        const { licenseTool } = await import('./license.js');
+        const mintResult = await licenseTool.mint(config, {
+          ip_id: params.parent_ip_id,
+          license_terms_id: termsId,
+          amount: 1,
+        });
+
+        if (!mintResult.success) {
+          return { success: false, error: `Auto-mint failed: ${mintResult.error}` };
+        }
+
+        params.license_token_id = mintResult.licenseTokenIds?.[0];
+        console.log('Minted license token:', params.license_token_id);
+      }
+
+      if (params.parent_license_terms_id && !/^\d+$/.test(params.parent_license_terms_id)) {
+        return { success: false, error: `Invalid license terms ID "${params.parent_license_terms_id}". Must be a numeric string.` };
+      }
+      if (params.license_token_id && !/^\d+$/.test(params.license_token_id)) {
+        return { success: false, error: `Invalid license token ID "${params.license_token_id}". Must be a numeric string.` };
+      }
 
       const pk = loadKey('evm');
       const account = _privateKeyToAccount(pk as `0x${string}`);
@@ -482,7 +564,10 @@ export const registerWorkTool = {
       const nftMetadataHash = ('0x' + createHash('sha256')
         .update(JSON.stringify(nftMetadata)).digest('hex')) as `0x${string}`;
 
-      let spgContract = config.story.spgNftContract;
+      // Re-read config from disk to avoid stale in-memory spgNftContract
+      const { loadConfig: reloadConfig } = await import('../config/store.js');
+      const freshConfig = reloadConfig();
+      let spgContract = freshConfig.story.spgNftContract;
       if (!spgContract) {
         const collection = await client.nftClient.createNFTCollection({
           name: `${config.near.accountId} Works`,
@@ -493,29 +578,40 @@ export const registerWorkTool = {
           contractURI: '',
         });
         spgContract = collection.spgNftContract!;
-        config.story.spgNftContract = spgContract;
+        // Save to disk via freshConfig — do NOT mutate the shared in-memory config object
+        freshConfig.story.spgNftContract = spgContract;
         const { saveConfig } = await import('../config/store.js');
-        saveConfig(config);
+        saveConfig(freshConfig);
       }
 
-      const response = await client.ipAsset.registerIpAsset({
-        nft: { type: 'mint', spgNftContract: spgContract as Address },
-        licenseTermsData: [{
-          terms: _PILFlavor.commercialRemix({
-            commercialRevShare: 5,
-            defaultMintingFee: 0n,
-            currency: _WIP_TOKEN_ADDRESS,
-          }),
-        }],
-        derivData: {
-          parentIpIds: [params.parent_ip_id as Address],
-          licenseTermsIds: [BigInt(params.parent_license_terms_id)],
-          maxMintingFee: 0n,
-          maxRts: 100_000_000n,
-          maxRevenueShare: 100,
-        },
-        ipMetadata: { ipMetadataURI, ipMetadataHash, nftMetadataURI, nftMetadataHash },
-      });
+      // Build registration params — two mutually exclusive paths:
+      // 1. derivData path: use parent's license terms IDs (standard derivative)
+      // 2. licenseTokenIds path: use pre-minted license tokens
+      const ipMetadataParam = { ipMetadataURI, ipMetadataHash, nftMetadataURI, nftMetadataHash };
+      const nftParam = { type: 'mint' as const, spgNftContract: spgContract as Address };
+
+      let response: any;
+      if (params.license_token_id) {
+        // License token path — derivData not needed
+        response = await client.ipAsset.registerDerivativeIpAsset({
+          nft: nftParam,
+          licenseTokenIds: [BigInt(params.license_token_id)],
+          ipMetadata: ipMetadataParam,
+        });
+      } else {
+        // Standard derivative path — use derivData with parent's license terms
+        response = await client.ipAsset.registerDerivativeIpAsset({
+          nft: nftParam,
+          derivData: {
+            parentIpIds: [params.parent_ip_id as Address],
+            licenseTermsIds: [BigInt(params.parent_license_terms_id!)],
+            maxMintingFee: BigInt(10) ** BigInt(18), // 1 WIP max
+            maxRts: 100_000_000,       // number, not bigint (SDK type)
+            maxRevenueShare: 100,
+          },
+          ipMetadata: ipMetadataParam,
+        });
+      }
 
       const result = {
         success: true,
@@ -535,9 +631,14 @@ export const registerWorkTool = {
           description: 'Derivative work',
           ipType: `text/${params.type}`,
           nftContract: spgContract!,
+          license: 'commercial-remix',
+          revenueShare: params.revenue_share ?? 5,
+          mintingFee: '0',
+          isCommercial: true,
           nearAccount: config.near.accountId,
           parentIpId: params.parent_ip_id,
           contentHash,
+          txHash: response.txHash,
         });
       }
 

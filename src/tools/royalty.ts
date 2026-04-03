@@ -22,13 +22,16 @@ export const royaltyTool = {
         chainId: config.story.chainId,
       });
 
-      const result = await client.royalty.payRoyaltyOnBehalf({
-        receiverIpId: params.receiver_ip_id as Address,
-        payerIpId: zeroAddress,
-        token: WIP_TOKEN_ADDRESS,
-        amount: parseEther(params.amount),
-        // Note: SDK handles IP→WIP wrapping internally
-      });
+      const result = await Promise.race([
+        client.royalty.payRoyaltyOnBehalf({
+          receiverIpId: params.receiver_ip_id as Address,
+          payerIpId: zeroAddress,
+          token: WIP_TOKEN_ADDRESS,
+          amount: parseEther(params.amount),
+          // Note: SDK handles IP→WIP wrapping internally
+        }),
+        new Promise<never>((_, reject) => setTimeout(() => reject(new Error('Story Protocol call timed out after 60s')), 60_000)),
+      ]);
 
       return {
         success: true,
@@ -72,15 +75,22 @@ export const royaltyTool = {
       }
 
       const claimed: Array<{ ipId: string; amount: string }> = [];
+      const errors: Array<{ ipId: string; error: string }> = [];
       for (const ipId of ipIds) {
         try {
-          const result = await client.royalty.claimAllRevenue({
-            ancestorIpId: ipId as Address,
-            claimer: ipId as Address,
-            currencyTokens: [WIP_TOKEN_ADDRESS],
-            childIpIds: [],
-            royaltyPolicies: [],
-          });
+          const result = await Promise.race([
+            client.royalty.claimAllRevenue({
+              ancestorIpId: ipId as Address,
+              // claimer = ipId: the IP account holds royalty tokens by default after registration
+              claimer: ipId as Address,
+              currencyTokens: [WIP_TOKEN_ADDRESS],
+              // Empty arrays: claims direct payments only. To claim derivative revenue,
+              // childIpIds and royaltyPolicies must be populated with known derivatives.
+              childIpIds: [],
+              royaltyPolicies: [],
+            }),
+            new Promise<never>((_, reject) => setTimeout(() => reject(new Error('Story Protocol call timed out after 60s')), 60_000)),
+          ]);
 
           if (result.claimedTokens && result.claimedTokens.length > 0) {
             for (const ct of result.claimedTokens) {
@@ -90,8 +100,12 @@ export const royaltyTool = {
               });
             }
           }
-        } catch {
-          // Skip IPs that have no vault or no revenue
+        } catch (err: any) {
+          const msg = err.message || String(err);
+          // Skip expected "no vault" / "no revenue" errors, but log unexpected ones
+          if (!msg.includes('vault') && !msg.includes('revenue') && !msg.includes('IpRoyaltyVault__NoClaimableTokens')) {
+            errors.push({ ipId, error: msg });
+          }
         }
       }
 
@@ -99,6 +113,7 @@ export const royaltyTool = {
         success: true,
         claimed,
         total_ips_checked: ipIds.length,
+        ...(errors.length > 0 && { errors }),
       };
     } catch (err: any) {
       return { success: false, error: err.message || String(err) };
