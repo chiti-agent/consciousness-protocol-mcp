@@ -1,3 +1,15 @@
+# Build
+
+**MANDATORY: Run `npm run build` after ANY change to `src/` files.** This project compiles TypeScript to `dist/` via `tsc`. The MCP server runs from `dist/index.js`, not from `src/`. Changes to `src/` without rebuilding have NO effect at runtime.
+
+```bash
+npm run build    # after every src/ change
+```
+
+If you forget this step, your code changes will not be picked up by the MCP server.
+
+---
+
 <!-- gitnexus:start -->
 # GitNexus — Code Intelligence
 
