@@ -578,6 +578,7 @@ export const royaltyTool = {
       };
 
       const assets: AssetRevenue[] = [];
+      const errors: Array<{ ipId: string; error: string }> = [];
       let grandTotalEarned = BigInt(0);
       let grandTotalClaimable = BigInt(0);
 
@@ -614,7 +615,9 @@ export const royaltyTool = {
               childCount: 0,
             });
           }
-        } catch {
+        } catch (err: any) {
+          const msg = err.message || String(err);
+          errors.push({ ipId, error: msg });
           assets.push({
             ipId,
             title,
@@ -638,6 +641,7 @@ export const royaltyTool = {
           claimable: formatEther(grandTotalClaimable),
         },
         assets,
+        ...(errors.length > 0 && { errors }),
       };
     } catch (err: any) {
       return { success: false, error: err.message || String(err) };
