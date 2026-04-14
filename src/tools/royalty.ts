@@ -543,4 +543,101 @@ export const royaltyTool = {
       return { success: false, error: err.message || String(err) };
     }
   },
+
+  async getRevenueAll(config: Config) {
+    try {
+      const { createPublicClient, http, formatEther } = await import('viem');
+      type Address = `0x${string}`;
+
+      const publicClient = createPublicClient({
+        transport: http(config.story.rpcUrl),
+      });
+
+      const registrations = loadRegistrations();
+      const ownIps = registrations
+        .filter((r) => r.success && r.ipId)
+        .map((r) => ({ ipId: r.ipId as string, title: r.title ?? `IP ${r.ipId!.slice(0, 10)}` }));
+
+      if (ownIps.length === 0) {
+        return { success: true, assets: [], totals: { earned: '0', claimable: '0' }, message: 'No registered IPs found' };
+      }
+
+      type AssetRevenue = {
+        ipId: string;
+        title: string;
+        hasVault: boolean;
+        mintingFeeEarned: string;
+        revenueShareReceived: string;
+        revenueShareClaimable: string;
+        totalEarned: string;
+        claimableNow: string;
+        childCount: number;
+      };
+
+      const assets: AssetRevenue[] = [];
+      let grandTotalEarned = BigInt(0);
+      let grandTotalClaimable = BigInt(0);
+
+      for (const { ipId, title } of ownIps) {
+        try {
+          const result = await this.getRevenue(config, { ip_id: ipId }) as any;
+          if (result.success && result.hasVault) {
+            const earned = BigInt(Math.round(parseFloat(result.totalEarned) * 1e18));
+            const claimable = BigInt(Math.round(parseFloat(result.claimableNow) * 1e18));
+            grandTotalEarned += earned;
+            grandTotalClaimable += claimable;
+
+            assets.push({
+              ipId,
+              title,
+              hasVault: true,
+              mintingFeeEarned: result.mintingFeeEarned,
+              revenueShareReceived: result.revenueShareReceived,
+              revenueShareClaimable: result.revenueShareClaimable,
+              totalEarned: result.totalEarned,
+              claimableNow: result.claimableNow,
+              childCount: result.children?.length ?? 0,
+            });
+          } else {
+            assets.push({
+              ipId,
+              title,
+              hasVault: false,
+              mintingFeeEarned: '0',
+              revenueShareReceived: '0',
+              revenueShareClaimable: '0',
+              totalEarned: '0',
+              claimableNow: '0',
+              childCount: 0,
+            });
+          }
+        } catch {
+          assets.push({
+            ipId,
+            title,
+            hasVault: false,
+            mintingFeeEarned: '0',
+            revenueShareReceived: '0',
+            revenueShareClaimable: '0',
+            totalEarned: '0',
+            claimableNow: '0',
+            childCount: 0,
+          });
+        }
+      }
+
+      return {
+        success: true,
+        totalAssets: ownIps.length,
+        assetsWithVault: assets.filter((a) => a.hasVault).length,
+        totals: {
+          earned: formatEther(grandTotalEarned),
+          claimable: formatEther(grandTotalClaimable),
+        },
+        assets,
+      };
+    } catch (err: any) {
+      return { success: false, error: err.message || String(err) };
+    }
+  },
 };
