@@ -198,6 +198,44 @@ async function fetchDerivatives(
   }
 }
 
+/**
+ * Read the actual commercialRevShare % for an IP from on-chain license terms.
+ * Returns the percentage as a number (e.g. 10 for 10%), or null if unreadable.
+ */
+async function getRevShareForIp(
+  publicClient: any,
+  ipId: `0x${string}`,
+): Promise<number | null> {
+  try {
+    const termsCount = await publicClient.readContract({
+      address: LICENSE_REGISTRY as `0x${string}`,
+      abi: LICENSE_REGISTRY_ABI,
+      functionName: 'getAttachedLicenseTermsCount',
+      args: [ipId],
+    }) as bigint;
+
+    if (termsCount === 0n) return null;
+
+    const [, licenseTermsId] = await publicClient.readContract({
+      address: LICENSE_REGISTRY as `0x${string}`,
+      abi: LICENSE_REGISTRY_ABI,
+      functionName: 'getAttachedLicenseTerms',
+      args: [ipId, 0n],
+    }) as [string, bigint];
+
+    const terms = await publicClient.readContract({
+      address: PIL as `0x${string}`,
+      abi: PIL_ABI,
+      functionName: 'getLicenseTerms',
+      args: [licenseTermsId],
+    }) as any;
+
+    return Number(terms.commercialRevShare) / 1_000_000;
+  } catch {
+    return null;
+  }
+}
+
 export const royaltyTool = {
   /**
    * Check revenue status for an IP asset — clear financial summary with
@@ -305,7 +343,7 @@ export const royaltyTool = {
         // When using Volem API we don't have rev share % inline — default to 10%.
         // The on-chain LAP contract enforces the actual percentage regardless of
         // what we display here; this is only used for the estimated pending calc.
-        const revenueSharePct = 10;
+        const revenueSharePct = await getRevShareForIp(publicClient, childIpId as `0x${string}`) ?? 10;
 
         try {
           const [childRevenue, transferred] = await Promise.all([
