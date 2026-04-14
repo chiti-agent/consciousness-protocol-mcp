@@ -344,6 +344,7 @@ export const royaltyTool = {
         // The on-chain LAP contract enforces the actual percentage regardless of
         // what we display here; this is only used for the estimated pending calc.
         const revenueSharePct = await getRevShareForIp(publicClient, childIpId as `0x${string}`) ?? 10;
+        const revShareBps = Math.round(revenueSharePct * 100); // basis points (integer-safe for BigInt)
 
         try {
           const [childRevenue, transferred] = await Promise.all([
@@ -362,7 +363,7 @@ export const royaltyTool = {
           ]);
 
           // Expected revenue share based on actual percentage from license terms
-          const expected = childRevenue * BigInt(revenueSharePct) / BigInt(100);
+          const expected = childRevenue * BigInt(revShareBps) / BigInt(10000);
           const pending = expected > transferred ? expected - transferred : BigInt(0);
 
           revenueShareTransferred += transferred;
