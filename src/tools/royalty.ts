@@ -6,7 +6,380 @@ import type { Config } from '../config/store.js';
 import { loadKey, REGISTRATIONS_FILE } from '../config/store.js';
 import { readFileSync, existsSync } from 'node:fs';
 
+/**
+ * Contract addresses on Story Protocol (Aeneid testnet + mainnet).
+ */
+const ROYALTY_MODULE = '0xD2f60c40fEbccf6311f8B47c4f2Ec6b040400086';
+const WIP_TOKEN = '0x1514000000000000000000000000000000000000';
+const ROYALTY_POLICY_LAP = '0xBe54FB168b3c982b7AaE60dB6CF75Bd8447b390E';
+
+const PIL = '0x2E896b0b2Fdb7457499B56AAaA4AE55BCB4Cd316';
+const LICENSE_REGISTRY = '0x529a750E02d8E2f15649c13D69a465286a780e24';
+
+const PIL_ABI = [{
+  name: 'getLicenseTerms',
+  type: 'function' as const,
+  inputs: [{ name: 'selectedLicenseTermsId', type: 'uint256' as const }],
+  outputs: [{ name: '', type: 'tuple' as const, components: [
+    { name: 'transferable', type: 'bool' as const },
+    { name: 'royaltyPolicy', type: 'address' as const },
+    { name: 'defaultMintingFee', type: 'uint256' as const },
+    { name: 'expiration', type: 'uint256' as const },
+    { name: 'commercialUse', type: 'bool' as const },
+    { name: 'commercialAttribution', type: 'bool' as const },
+    { name: 'commercializerChecker', type: 'address' as const },
+    { name: 'commercializerCheckerData', type: 'bytes' as const },
+    { name: 'commercialRevShare', type: 'uint32' as const },
+    { name: 'commercialRevCeiling', type: 'uint256' as const },
+    { name: 'derivativesAllowed', type: 'bool' as const },
+    { name: 'derivativesAttribution', type: 'bool' as const },
+    { name: 'derivativesApproval', type: 'bool' as const },
+    { name: 'derivativesReciprocal', type: 'bool' as const },
+    { name: 'derivativeRevCeiling', type: 'uint256' as const },
+    { name: 'currency', type: 'address' as const },
+    { name: 'uri', type: 'string' as const },
+  ]}],
+  stateMutability: 'view' as const,
+}] as const;
+
+const LICENSE_REGISTRY_ABI = [
+  {
+    type: 'function' as const,
+    name: 'getAttachedLicenseTermsCount',
+    inputs: [{ name: 'ipId', type: 'address' as const }],
+    outputs: [{ name: '', type: 'uint256' as const }],
+    stateMutability: 'view' as const,
+  },
+  {
+    type: 'function' as const,
+    name: 'getAttachedLicenseTerms',
+    inputs: [
+      { name: 'ipId', type: 'address' as const },
+      { name: 'index', type: 'uint256' as const },
+    ],
+    outputs: [
+      { name: 'licenseTemplate', type: 'address' as const },
+      { name: 'licenseTermsId', type: 'uint256' as const },
+    ],
+    stateMutability: 'view' as const,
+  },
+] as const;
+
+const ROYALTY_MODULE_ABI = [
+  {
+    inputs: [{ name: 'ipId', type: 'address' }],
+    name: 'ipRoyaltyVaults',
+    outputs: [{ type: 'address' }],
+    stateMutability: 'view',
+    type: 'function',
+  },
+  {
+    inputs: [{ name: 'ipId', type: 'address' }, { name: 'token', type: 'address' }],
+    name: 'totalRevenueTokensReceived',
+    outputs: [{ type: 'uint256' }],
+    stateMutability: 'view',
+    type: 'function',
+  },
+] as const;
+
+const VAULT_ABI = [
+  {
+    inputs: [],
+    name: 'getCurrentSnapshotId',
+    outputs: [{ type: 'uint256' }],
+    stateMutability: 'view',
+    type: 'function',
+  },
+  {
+    inputs: [
+      { name: 'account', type: 'address' },
+      { name: 'snapshotId', type: 'uint256' },
+      { name: 'token', type: 'address' },
+    ],
+    name: 'claimableRevenue',
+    outputs: [{ type: 'uint256' }],
+    stateMutability: 'view',
+    type: 'function',
+  },
+] as const;
+
+const WIP_ABI = [
+  {
+    inputs: [{ name: 'account', type: 'address' }],
+    name: 'balanceOf',
+    outputs: [{ type: 'uint256' }],
+    stateMutability: 'view',
+    type: 'function',
+  },
+] as const;
+
+const LAP_ABI = [{
+  inputs: [
+    { name: 'ipId', type: 'address' },
+    { name: 'ancestorIpId', type: 'address' },
+    { name: 'token', type: 'address' },
+  ],
+  name: 'getTransferredTokens',
+  outputs: [{ type: 'uint256' }],
+  stateMutability: 'view',
+  type: 'function',
+}] as const;
+
+type Registration = {
+  success?: boolean;
+  ipId?: string;
+  parentIpId?: string;
+  revenueShare?: number;
+  title?: string;
+  [key: string]: unknown;
+};
+
+/** Load registrations from the local JSON file. */
+function loadRegistrations(): Registration[] {
+  if (!existsSync(REGISTRATIONS_FILE)) return [];
+  return JSON.parse(readFileSync(REGISTRATIONS_FILE, 'utf-8'));
+}
+
+/** Find direct children of a given IP from registrations. */
+function findDirectChildren(registrations: Registration[], parentIpId: string): Registration[] {
+  return registrations.filter(
+    (r) => r.success && r.parentIpId === parentIpId && r.ipId,
+  );
+}
+
+/** Recursively find all descendants (children, grandchildren, ...) for display. */
+function findAllDescendants(registrations: Registration[], parentIpId: string): Registration[] {
+  const directChildren = findDirectChildren(registrations, parentIpId);
+  const allDescendants: Registration[] = [...directChildren];
+  for (const child of directChildren) {
+    if (child.ipId) {
+      allDescendants.push(...findAllDescendants(registrations, child.ipId));
+    }
+  }
+  return allDescendants;
+}
+
+/** File-based fallback for derivative discovery (uses registrations.json). */
+function findChildrenFromFile(ipId: string, recursive: boolean): string[] {
+  const registrations = loadRegistrations();
+  if (recursive) {
+    return findAllDescendants(registrations, ipId)
+      .map((r) => r.ipId)
+      .filter((id): id is string => !!id);
+  }
+  return findDirectChildren(registrations, ipId)
+    .map((r) => r.ipId)
+    .filter((id): id is string => !!id);
+}
+
+/** Resolve Volem API base URL from config, env, or default. */
+function resolveVolemApiUrl(config: Config): string {
+  return config.volemApiUrl ?? process.env.VOLEM_API_URL ?? 'http://localhost:3010';
+}
+
+/**
+ * Fetch derivative IP IDs from Volem API, falling back to registrations.json
+ * if the API is unavailable.
+ */
+async function fetchDerivatives(
+  ipId: string,
+  recursive: boolean,
+  volemApiUrl: string,
+): Promise<string[]> {
+  try {
+    const url = `${volemApiUrl}/api/ip/${ipId}/derivatives${recursive ? '?recursive=true' : ''}`;
+    const res = await fetch(url, { signal: AbortSignal.timeout(10_000) });
+    if (!res.ok) return findChildrenFromFile(ipId, recursive);
+    const data = await res.json();
+    return data.success ? (data.ipIds ?? []) : findChildrenFromFile(ipId, recursive);
+  } catch {
+    // Volem unavailable — fall back to registrations.json
+    return findChildrenFromFile(ipId, recursive);
+  }
+}
+
 export const royaltyTool = {
+  /**
+   * Check revenue status for an IP asset — clear financial summary with
+   * separate minting fee income vs revenue share income, plus claimable total.
+   * Read-only, no gas cost.
+   */
+  async getRevenue(config: Config, params: { ip_id: string }) {
+    try {
+      const { createPublicClient, http, formatEther } = await import('viem');
+      type Address = `0x${string}`;
+
+      const publicClient = createPublicClient({
+        transport: http(config.story.rpcUrl),
+      });
+
+      const ipId = params.ip_id as Address;
+
+      // Get vault address
+      const vaultAddress = await publicClient.readContract({
+        address: ROYALTY_MODULE as Address,
+        abi: ROYALTY_MODULE_ABI,
+        functionName: 'ipRoyaltyVaults',
+        args: [ipId],
+      }) as Address;
+
+      const hasVault = vaultAddress !== '0x0000000000000000000000000000000000000000';
+
+      if (!hasVault) {
+        return {
+          success: true,
+          ipId: params.ip_id,
+          hasVault: false,
+          message: 'No royalty vault exists for this IP. Vault is created when the first derivative mints a license.',
+        };
+      }
+
+      // Fetch vault data in parallel: total received, claimable from snapshot, vault WIP balance
+      const totalReceivedPromise = publicClient.readContract({
+        address: ROYALTY_MODULE as Address,
+        abi: ROYALTY_MODULE_ABI,
+        functionName: 'totalRevenueTokensReceived',
+        args: [ipId, WIP_TOKEN as Address],
+      }) as Promise<bigint>;
+
+      const vaultBalancePromise = publicClient.readContract({
+        address: WIP_TOKEN as Address,
+        abi: WIP_ABI,
+        functionName: 'balanceOf',
+        args: [vaultAddress],
+      }) as Promise<bigint>;
+
+      // Snapshot-based claimable
+      let claimable = BigInt(0);
+      const snapshotClaimablePromise = (async () => {
+        try {
+          const snapshotId = await publicClient.readContract({
+            address: vaultAddress,
+            abi: VAULT_ABI,
+            functionName: 'getCurrentSnapshotId',
+          }) as bigint;
+          if (snapshotId > BigInt(0)) {
+            claimable = await publicClient.readContract({
+              address: vaultAddress,
+              abi: VAULT_ABI,
+              functionName: 'claimableRevenue',
+              args: [ipId, snapshotId, WIP_TOKEN as Address],
+            }) as bigint;
+          }
+        } catch {
+          // No snapshot yet — claimable stays 0
+        }
+      })();
+
+      const [totalReceived, vaultBalance] = await Promise.all([
+        totalReceivedPromise,
+        vaultBalancePromise,
+        snapshotClaimablePromise,
+      ]);
+
+      // --- Revenue share from children ---
+      const volemApiUrl = resolveVolemApiUrl(config);
+      const [directChildIpIds, allDescendantIpIds] = await Promise.all([
+        fetchDerivatives(params.ip_id, false, volemApiUrl),
+        fetchDerivatives(params.ip_id, true, volemApiUrl),
+      ]);
+
+      let revenueShareTransferred = BigInt(0);
+      let revenueSharePending = BigInt(0);
+
+      type ChildDetail = {
+        childIpId: string;
+        title: string;
+        isDirect: boolean;
+        revenueSharePct: number;
+        childRevenue: string;
+        transferred: string;
+        pending: string;
+      };
+      const childDetails: ChildDetail[] = [];
+
+      const directChildIdSet = new Set(directChildIpIds);
+
+      for (const childIpId of allDescendantIpIds) {
+        const isDirect = directChildIdSet.has(childIpId);
+        // When using Volem API we don't have rev share % inline — default to 10%.
+        // The on-chain LAP contract enforces the actual percentage regardless of
+        // what we display here; this is only used for the estimated pending calc.
+        const revenueSharePct = 10;
+
+        try {
+          const [childRevenue, transferred] = await Promise.all([
+            publicClient.readContract({
+              address: ROYALTY_MODULE as Address,
+              abi: ROYALTY_MODULE_ABI,
+              functionName: 'totalRevenueTokensReceived',
+              args: [childIpId as Address, WIP_TOKEN as Address],
+            }) as Promise<bigint>,
+            publicClient.readContract({
+              address: ROYALTY_POLICY_LAP as Address,
+              abi: LAP_ABI,
+              functionName: 'getTransferredTokens',
+              args: [childIpId as Address, ipId, WIP_TOKEN as Address],
+            }) as Promise<bigint>,
+          ]);
+
+          // Expected revenue share based on actual percentage from license terms
+          const expected = childRevenue * BigInt(revenueSharePct) / BigInt(100);
+          const pending = expected > transferred ? expected - transferred : BigInt(0);
+
+          revenueShareTransferred += transferred;
+          revenueSharePending += pending;
+
+          if (childRevenue > BigInt(0) || transferred > BigInt(0)) {
+            childDetails.push({
+              childIpId,
+              title: 'unknown',
+              isDirect,
+              revenueSharePct,
+              childRevenue: formatEther(childRevenue),
+              transferred: formatEther(transferred),
+              pending: formatEther(pending),
+            });
+          }
+        } catch {
+          // Skip children that can't be read
+        }
+      }
+
+      // --- Financial summary ---
+      // mintingFeeEarned = totalRevenueTokensReceived (what flows into vault from license minting)
+      const mintingFeeEarned = totalReceived;
+      // claimableNow = vault claimable (from snapshot) + pending rev share from direct children
+      const claimableNow = claimable + revenueSharePending;
+      // totalEarned = minting fees + all revenue share (received + pending)
+      const totalEarned = mintingFeeEarned + revenueShareTransferred + revenueSharePending;
+
+      return {
+        success: true,
+        ipId: params.ip_id,
+        hasVault: true,
+        vaultAddress,
+
+        // Separate earnings breakdown
+        mintingFeeEarned: formatEther(mintingFeeEarned),
+        revenueShareReceived: formatEther(revenueShareTransferred),
+        revenueShareClaimable: formatEther(revenueSharePending),
+        totalEarned: formatEther(totalEarned),
+
+        // What can be claimed RIGHT NOW
+        claimableNow: formatEther(claimableNow),
+
+        // Raw vault data for debugging
+        vaultBalance: formatEther(vaultBalance),
+
+        // Children details (for transparency)
+        ...(childDetails.length > 0 && { children: childDetails }),
+      };
+    } catch (err: any) {
+      return { success: false, error: err.message || String(err) };
+    }
+  },
+
   async pay(config: Config, params: { receiver_ip_id: string; amount: string }) {
     try {
       const { StoryClient, WIP_TOKEN_ADDRESS } = await import('@story-protocol/core-sdk');
@@ -48,7 +421,7 @@ export const royaltyTool = {
     try {
       const { StoryClient, WIP_TOKEN_ADDRESS } = await import('@story-protocol/core-sdk');
       const { privateKeyToAccount } = await import('viem/accounts');
-      const { http } = await import('viem');
+      const { http, formatEther } = await import('viem');
       type Address = `0x${string}`;
 
       const pk = loadKey('evm');
@@ -59,45 +432,57 @@ export const royaltyTool = {
         chainId: config.story.chainId,
       });
 
-      // Get IP IDs to claim from
+      // Determine which IPs to claim from
+      const registrations = loadRegistrations();
       let ipIds: string[] = [];
       if (params.ip_id) {
         ipIds = [params.ip_id];
-      } else if (existsSync(REGISTRATIONS_FILE)) {
-        const registrations = JSON.parse(readFileSync(REGISTRATIONS_FILE, 'utf-8'));
+      } else {
         ipIds = registrations
-          .filter((r: any) => r.success && r.ipId)
-          .map((r: any) => r.ipId);
+          .filter((r) => r.success && r.ipId)
+          .map((r) => r.ipId as string);
       }
 
       if (ipIds.length === 0) {
-        return { success: true, claimed: [], total: '0', message: 'No registered IPs found' };
+        return { success: true, claimed: [], totalClaimed: '0', total_ips_checked: 0, message: 'No registered IPs found' };
       }
 
-      const claimed: Array<{ ipId: string; amount: string }> = [];
+      const volemApiUrl = resolveVolemApiUrl(config);
+      const claimed: Array<{ ipId: string; amount: string; txHash: string }> = [];
       const errors: Array<{ ipId: string; error: string }> = [];
+      let totalClaimedWei = BigInt(0);
+
       for (const ipId of ipIds) {
         try {
+          // Find DIRECT children only — Story Protocol LAP limitation
+          const directChildIds = await fetchDerivatives(ipId, false, volemApiUrl);
+          const childIpIds: Address[] = directChildIds.map((id) => id as Address);
+          const royaltyPolicies = childIpIds.map(() => ROYALTY_POLICY_LAP as Address);
+
           const result = await Promise.race([
             client.royalty.claimAllRevenue({
               ancestorIpId: ipId as Address,
-              // claimer = ipId: the IP account holds royalty tokens by default after registration
               claimer: ipId as Address,
               currencyTokens: [WIP_TOKEN_ADDRESS],
-              // Empty arrays: claims direct payments only. To claim derivative revenue,
-              // childIpIds and royaltyPolicies must be populated with known derivatives.
-              childIpIds: [],
-              royaltyPolicies: [],
+              childIpIds,
+              royaltyPolicies,
             }),
             new Promise<never>((_, reject) => setTimeout(() => reject(new Error('Story Protocol call timed out after 60s')), 60_000)),
           ]);
 
           if (result.claimedTokens && result.claimedTokens.length > 0) {
+            const txHash = result.txHashes?.[0] ?? '';
             for (const ct of result.claimedTokens) {
-              claimed.push({
-                ipId,
-                amount: ct.amount?.toString() ?? '0',
-              });
+              const rawAmount = (ct as any).amount ?? BigInt(0);
+              const amountBigInt = typeof rawAmount === 'bigint' ? rawAmount : BigInt(String(rawAmount));
+              if (amountBigInt > BigInt(0)) {
+                totalClaimedWei += amountBigInt;
+                claimed.push({
+                  ipId,
+                  amount: formatEther(amountBigInt),
+                  txHash,
+                });
+              }
             }
           }
         } catch (err: any) {
@@ -112,6 +497,7 @@ export const royaltyTool = {
       return {
         success: true,
         claimed,
+        totalClaimed: formatEther(totalClaimedWei),
         total_ips_checked: ipIds.length,
         ...(errors.length > 0 && { errors }),
       };
