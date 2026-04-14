@@ -155,14 +155,15 @@ server.tool(
 
 server.tool(
   'register_derivative',
-  'Register a derivative work of an existing IP. Revenue share automatically flows to parent. ASK PERMISSION: costs gas + possible minting fee.',
+  'Register a derivative work of an existing IP. Only parent_ip_id is required — license terms are auto-resolved and token auto-minted. Revenue share automatically flows to parent. ASK PERMISSION: costs gas + possible minting fee.',
   {
     title: z.string().describe('Title of derivative work'),
     content: z.string().describe('Full text content'),
     type: z.enum(['poem', 'analysis', 'code', 'post', 'design', 'other']).describe('Type'),
     parent_ip_id: z.string().regex(/^0x[a-fA-F0-9]{40}$/, 'Must be a valid Ethereum address (0x + 40 hex chars)').describe('IP Asset ID of parent work (0x...)'),
-    parent_license_terms_id: z.string().describe('License terms ID from parent'),
-    license_token_id: z.string().optional().describe('If using pre-minted license token (burns it)'),
+    parent_license_terms_id: z.string().optional().describe('License terms ID (auto-resolved if omitted)'),
+    license_token_id: z.string().optional().describe('License token ID (auto-minted if omitted)'),
+    revenue_share: z.number().min(0).max(100).default(5).describe('Revenue share % for sub-derivatives (default: 5)'),
   },
   async (params) => {
     if (!config) return { content: [{ type: 'text' as const, text: 'Not configured. Run setup first.' }] };
@@ -183,6 +184,32 @@ server.tool(
     if (!config) return { content: [{ type: 'text' as const, text: 'Not configured. Run setup first.' }] };
     const { licenseTool } = await import('./tools/license.js');
     const result = await licenseTool.mint(config, params);
+    return { content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }] };
+  },
+);
+
+server.tool(
+  'get_revenue_all',
+  'Get revenue summary across ALL your registered IP assets — total earned, total claimable, per-asset breakdown with minting fees and revenue share from derivatives at any depth. Read-only, no gas cost.',
+  {},
+  async () => {
+    if (!config) return { content: [{ type: 'text' as const, text: 'Not configured. Run setup first.' }] };
+    const { royaltyTool } = await import('./tools/royalty.js');
+    const result = await royaltyTool.getRevenueAll(config);
+    return { content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }] };
+  },
+);
+
+server.tool(
+  'get_revenue',
+  'Check revenue for ONE specific IP asset — detailed breakdown with minting fees, revenue share from derivatives at any depth, claimable amount. Use get_revenue_all for portfolio overview. Read-only, no gas cost.',
+  {
+    ip_id: z.string().regex(/^0x[a-fA-F0-9]{40}$/, 'Must be a valid Ethereum address').describe('IP Asset ID to check (0x...)'),
+  },
+  async (params) => {
+    if (!config) return { content: [{ type: 'text' as const, text: 'Not configured. Run setup first.' }] };
+    const { royaltyTool } = await import('./tools/royalty.js');
+    const result = await royaltyTool.getRevenue(config, params);
     return { content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }] };
   },
 );
