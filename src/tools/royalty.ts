@@ -386,8 +386,10 @@ export const royaltyTool = {
       }
 
       // --- Financial summary ---
-      // mintingFeeEarned = totalRevenueTokensReceived (what flows into vault from license minting)
-      const mintingFeeEarned = totalReceived;
+      // mintingFeeEarned = total received minus rev share already transferred in
+      const mintingFeeEarned = totalReceived > revenueShareTransferred
+        ? totalReceived - revenueShareTransferred
+        : totalReceived;
       // claimableNow = vault claimable (from snapshot) + pending rev share from direct children
       const claimableNow = claimable + revenueSharePending;
       // totalEarned = minting fees + all revenue share (received + pending)
