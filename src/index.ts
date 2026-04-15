@@ -11,6 +11,7 @@
 
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
+import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { z } from 'zod';
 
 import { registerWorkTool } from './tools/register-work.js';
@@ -231,7 +232,7 @@ server.tool(
 
 server.tool(
   'claim_revenue',
-  'Claim all unclaimed revenue from your IP Assets. Automatically transfers to your wallet. No permission needed — money comes in, not out.',
+  'Claim all unclaimed revenue from your IP assets and transfer to your wallet in one step. SDK auto-transfers claimed tokens from IP account to wallet and unwraps WIP to IP. No separate withdraw needed.',
   {
     ip_id: z.string().optional().describe('Specific IP to claim from (default: all own IPs)'),
   },
@@ -310,9 +311,79 @@ server.tool(
 
 // ─── Start Server ───
 
+const useHttp = process.argv.includes('--http') || process.env.MCP_TRANSPORT === 'http';
+
 async function main() {
-  const transport = new StdioServerTransport();
-  await server.connect(transport);
+  if (useHttp) {
+    const { createServer } = await import('node:http');
+    const { randomUUID } = await import('node:crypto');
+
+    const PORT = parseInt(process.env.MCP_PORT ?? '3020', 10);
+
+    // Map of session ID → transport instance
+    const sessions = new Map<string, StreamableHTTPServerTransport>();
+
+    const httpServer = createServer(async (req, res) => {
+      const url = new URL(req.url ?? '/', `http://localhost:${PORT}`);
+
+      if (url.pathname !== '/mcp') {
+        res.writeHead(404, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'Not found. Use /mcp endpoint.' }));
+        return;
+      }
+
+      // Handle DELETE for session cleanup
+      if (req.method === 'DELETE') {
+        const sessionId = req.headers['mcp-session-id'] as string | undefined;
+        if (sessionId && sessions.has(sessionId)) {
+          const transport = sessions.get(sessionId)!;
+          await transport.close();
+          sessions.delete(sessionId);
+          res.writeHead(200);
+          res.end();
+        } else {
+          res.writeHead(404);
+          res.end();
+        }
+        return;
+      }
+
+      // For GET/POST: route to existing session or create new one
+      const sessionId = req.headers['mcp-session-id'] as string | undefined;
+
+      if (sessionId && sessions.has(sessionId)) {
+        const transport = sessions.get(sessionId)!;
+        await transport.handleRequest(req, res);
+        return;
+      }
+
+      // New session: create transport and connect a fresh server instance
+      const transport = new StreamableHTTPServerTransport({
+        sessionIdGenerator: () => randomUUID(),
+      });
+
+      transport.onclose = () => {
+        if (transport.sessionId) {
+          sessions.delete(transport.sessionId);
+        }
+      };
+
+      await server.connect(transport);
+
+      if (transport.sessionId) {
+        sessions.set(transport.sessionId, transport);
+      }
+
+      await transport.handleRequest(req, res);
+    });
+
+    httpServer.listen(PORT, () => {
+      console.error(`MCP server listening on http://localhost:${PORT}/mcp (Streamable HTTP)`);
+    });
+  } else {
+    const transport = new StdioServerTransport();
+    await server.connect(transport);
+  }
 }
 
 main().catch((err) => {

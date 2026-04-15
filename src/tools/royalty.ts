@@ -140,6 +140,58 @@ function loadRegistrations(): Registration[] {
   return JSON.parse(readFileSync(REGISTRATIONS_FILE, 'utf-8'));
 }
 
+/** Fetch ALL IPs owned by the wallet from Story Protocol API (paginated). Falls back to registrations.json. */
+async function fetchAllOwnIps(config: Config): Promise<Array<{ ipId: string; title: string }>> {
+  const apiKey = config.storyApiKey;
+  const ownerAddress = config.story.evmAddress;
+
+  if (apiKey && ownerAddress) {
+    try {
+      const baseUrl = 'https://api.storyapis.com';
+      const allIps: Array<{ ipId: string; title: string }> = [];
+      let offset = 0;
+      const pageSize = 100;
+
+      while (true) {
+        const res = await fetch(`${baseUrl}/assets`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'X-Api-Key': apiKey },
+          body: JSON.stringify({
+            where: { ownerAddress },
+            orderBy: 'createdAt',
+            orderDirection: 'desc',
+            pagination: { limit: pageSize, offset },
+          }),
+          signal: AbortSignal.timeout(30_000),
+        });
+
+        if (!res.ok) break;
+
+        const data = await res.json() as { data?: Array<{ id: string; title?: string }> };
+        const page = data.data ?? [];
+        if (page.length === 0) break;
+
+        for (const a of page) {
+          allIps.push({ ipId: a.id, title: a.title ?? `IP ${a.id.slice(0, 10)}` });
+        }
+
+        if (page.length < pageSize) break;
+        offset += pageSize;
+      }
+
+      if (allIps.length > 0) return allIps;
+    } catch {
+      // fall through to registrations.json
+    }
+  }
+
+  // Fallback: local registrations
+  const regs = loadRegistrations();
+  return regs
+    .filter((r) => r.success && r.ipId)
+    .map((r) => ({ ipId: r.ipId as string, title: r.title ?? `IP ${r.ipId!.slice(0, 10)}` }));
+}
+
 /** Find direct children of a given IP from registrations. */
 function findDirectChildren(registrations: Registration[], parentIpId: string): Registration[] {
   return registrations.filter(
@@ -556,10 +608,7 @@ export const royaltyTool = {
         transport: http(config.story.rpcUrl),
       });
 
-      const registrations = loadRegistrations();
-      const ownIps = registrations
-        .filter((r) => r.success && r.ipId)
-        .map((r) => ({ ipId: r.ipId as string, title: r.title ?? `IP ${r.ipId!.slice(0, 10)}` }));
+      const ownIps = await fetchAllOwnIps(config);
 
       if (ownIps.length === 0) {
         return { success: true, assets: [], totals: { earned: '0', claimable: '0' }, message: 'No registered IPs found' };
