@@ -514,7 +514,7 @@ export const royaltyTool = {
     try {
       const { StoryClient, WIP_TOKEN_ADDRESS } = await import('@story-protocol/core-sdk');
       const { privateKeyToAccount } = await import('viem/accounts');
-      const { http, formatEther } = await import('viem');
+      const { createPublicClient, http, formatEther } = await import('viem');
       type Address = `0x${string}`;
 
       const pk = loadKey('evm');
@@ -524,6 +524,7 @@ export const royaltyTool = {
         transport: http(config.story.rpcUrl),
         chainId: config.story.chainId,
       });
+      const publicClient = createPublicClient({ transport: http(config.story.rpcUrl) });
 
       // Determine which IPs to claim from
       const registrations = loadRegistrations();
@@ -547,10 +548,30 @@ export const royaltyTool = {
 
       for (const ipId of ipIds) {
         try {
-          // Find DIRECT children only — Story Protocol LAP limitation
-          const directChildIds = await fetchDerivatives(ipId, false, volemApiUrl);
-          const childIpIds: Address[] = directChildIds.map((id) => id as Address);
-          const royaltyPolicies = childIpIds.map(() => ROYALTY_POLICY_LAP as Address);
+          // Collect ALL descendants (direct + grandchildren + deeper). LAP uses the
+          // IP graph precompile internally to compute the correct ancestor share
+          // for any depth. Filter out zero-revenue descendants because
+          // claimAllRevenue reverts with "Array index out of bounds" (0xa05b90b8)
+          // on them.
+          const descendantIds = await fetchDerivatives(ipId, true, volemApiUrl);
+          const revenues = await Promise.all(
+            descendantIds.map((id) =>
+              (publicClient.readContract({
+                address: ROYALTY_MODULE as Address,
+                abi: ROYALTY_MODULE_ABI,
+                functionName: 'totalRevenueTokensReceived',
+                args: [id as Address, WIP_TOKEN as Address],
+              }) as Promise<bigint>).catch(() => BigInt(0)),
+            ),
+          );
+          const childIpIds: Address[] = [];
+          const royaltyPolicies: Address[] = [];
+          for (let i = 0; i < descendantIds.length; i++) {
+            if (revenues[i] > BigInt(0)) {
+              childIpIds.push(descendantIds[i] as Address);
+              royaltyPolicies.push(ROYALTY_POLICY_LAP as Address);
+            }
+          }
 
           const result = await Promise.race([
             client.royalty.claimAllRevenue({
