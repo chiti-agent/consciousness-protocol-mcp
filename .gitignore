@@ -6,3 +6,4 @@ dist/
 !src/**
 .env
 .gitnexus
+package-lock.json

@@ -1,0 +1,29 @@
+# Source and config
+src/
+tests/
+tsconfig.json
+yarn.lock
+.gitignore
+.DS_Store
+
+# CI/CD and tooling
+.github/
+.claude/
+.gitnexus/
+
+# Documentation (not needed on npm, README.md included via files)
+docs/
+AGENTS.md
+CLAUDE.md
+
+# Secrets and state
+.env
+.env.*
+states/
+data/
+keys/
+
+# Editor
+*.swp
+*.swo
+*~

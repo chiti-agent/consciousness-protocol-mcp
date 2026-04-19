@@ -4,14 +4,32 @@
   "description": "MCP server for AI agent IP registration with blockchain provenance",
   "type": "module",
   "main": "dist/index.js",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
   "bin": {
     "consciousness-protocol": "dist/cli.js",
     "consciousness-protocol-mcp": "dist/index.js"
   },
   "files": [
     "dist",
-    "README.md"
+    "README.md",
+    "LICENSE"
   ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/chiti-agent/consciousness-protocol-mcp.git"
+  },
+  "homepage": "https://github.com/chiti-agent/consciousness-protocol-mcp#readme",
+  "bugs": {
+    "url": "https://github.com/chiti-agent/consciousness-protocol-mcp/issues"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
   "scripts": {
     "build": "tsc",
     "dev": "tsx src/index.ts",
