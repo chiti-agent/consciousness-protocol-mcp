@@ -449,12 +449,11 @@ export const registerWorkTool = {
       await ensureImports();
       type Address = `0x${string}`;
 
-      // Auto-resolve: if neither terms ID nor token ID provided, find and mint automatically
+      // Auto-resolve license terms from on-chain if not provided
+      // registerDerivativeIpAsset with derivData handles minting internally — no need to pre-mint
       if (!params.parent_license_terms_id && !params.license_token_id) {
-        console.log('Auto-resolving license for parent IP:', params.parent_ip_id);
+        console.log('Auto-resolving license terms for parent IP:', params.parent_ip_id);
 
-        // Find parent's license terms on-chain via LicenseRegistry
-        let termsId: string | null = null;
         const { createPublicClient } = await import('viem');
         const publicClient = createPublicClient({
           transport: _http(config.story.rpcUrl),
@@ -474,48 +473,31 @@ export const registerWorkTool = {
           args: [params.parent_ip_id as Address],
         });
 
-        if (termsCount > 0n) {
-          const [, licenseTermsId] = await publicClient.readContract({
-            address: LICENSE_REGISTRY,
-            abi: [{
-              type: 'function',
-              name: 'getAttachedLicenseTerms',
-              inputs: [
-                { name: 'ipId', type: 'address' },
-                { name: 'index', type: 'uint256' },
-              ],
-              outputs: [
-                { name: 'licenseTemplate', type: 'address' },
-                { name: 'licenseTermsId', type: 'uint256' },
-              ],
-              stateMutability: 'view',
-            }],
-            functionName: 'getAttachedLicenseTerms',
-            args: [params.parent_ip_id as Address, 0n],
-          });
-          termsId = String(licenseTermsId);
+        if (termsCount === 0n) {
+          return { success: false, error: `No license terms found for parent IP ${params.parent_ip_id}. The parent must have license terms attached.` };
         }
 
-        if (!termsId) {
-          return { success: false, error: `Could not find license terms for parent IP ${params.parent_ip_id}. The parent must have license terms attached.` };
-        }
-
-        console.log('Found license terms ID:', termsId, '— minting token...');
-
-        // Auto-mint license token
-        const { licenseTool } = await import('./license.js');
-        const mintResult = await licenseTool.mint(config, {
-          ip_id: params.parent_ip_id,
-          license_terms_id: termsId,
-          amount: 1,
+        const [, licenseTermsId] = await publicClient.readContract({
+          address: LICENSE_REGISTRY,
+          abi: [{
+            type: 'function',
+            name: 'getAttachedLicenseTerms',
+            inputs: [
+              { name: 'ipId', type: 'address' },
+              { name: 'index', type: 'uint256' },
+            ],
+            outputs: [
+              { name: 'licenseTemplate', type: 'address' },
+              { name: 'licenseTermsId', type: 'uint256' },
+            ],
+            stateMutability: 'view',
+          }],
+          functionName: 'getAttachedLicenseTerms',
+          args: [params.parent_ip_id as Address, 0n],
         });
 
-        if (!mintResult.success) {
-          return { success: false, error: `Auto-mint failed: ${mintResult.error}` };
-        }
-
-        params.license_token_id = mintResult.licenseTokenIds?.[0];
-        console.log('Minted license token:', params.license_token_id);
+        params.parent_license_terms_id = String(licenseTermsId);
+        console.log('Auto-resolved license terms ID:', params.parent_license_terms_id);
       }
 
       if (params.parent_license_terms_id && !/^\d+$/.test(params.parent_license_terms_id)) {
@@ -590,6 +572,51 @@ export const registerWorkTool = {
       const ipMetadataParam = { ipMetadataURI, ipMetadataHash, nftMetadataURI, nftMetadataHash };
       const nftParam = { type: 'mint' as const, spgNftContract: spgContract as Address };
 
+      // For the derivData path, read the actual minting fee from PIL so we don't
+      // revert with "minting fee exceeded" when the parent charges more than a fixed cap.
+      let maxMintingFee = BigInt(0);
+      if (!params.license_token_id && params.parent_license_terms_id) {
+        try {
+          const { createPublicClient: _pilPc } = await import('viem');
+          const pilClient = _pilPc({ transport: _http(config.story.rpcUrl) });
+          const PIL_ADDRESS = '0x2E896b0b2Fdb7457499B56AAaA4AE55BCB4Cd316' as Address;
+          const terms = await pilClient.readContract({
+            address: PIL_ADDRESS,
+            abi: [{
+              type: 'function' as const,
+              name: 'getLicenseTerms',
+              inputs: [{ name: 'selectedLicenseTermsId', type: 'uint256' as const }],
+              outputs: [{ name: '', type: 'tuple' as const, components: [
+                { name: 'transferable', type: 'bool' as const },
+                { name: 'royaltyPolicy', type: 'address' as const },
+                { name: 'defaultMintingFee', type: 'uint256' as const },
+                { name: 'expiration', type: 'uint256' as const },
+                { name: 'commercialUse', type: 'bool' as const },
+                { name: 'commercialAttribution', type: 'bool' as const },
+                { name: 'commercializerChecker', type: 'address' as const },
+                { name: 'commercializerCheckerData', type: 'bytes' as const },
+                { name: 'commercialRevShare', type: 'uint32' as const },
+                { name: 'commercialRevCeiling', type: 'uint256' as const },
+                { name: 'derivativesAllowed', type: 'bool' as const },
+                { name: 'derivativesAttribution', type: 'bool' as const },
+                { name: 'derivativesApproval', type: 'bool' as const },
+                { name: 'derivativesReciprocal', type: 'bool' as const },
+                { name: 'derivativeRevCeiling', type: 'uint256' as const },
+                { name: 'currency', type: 'address' as const },
+                { name: 'uri', type: 'string' as const },
+              ]}],
+              stateMutability: 'view' as const,
+            }] as const,
+            functionName: 'getLicenseTerms',
+            args: [BigInt(params.parent_license_terms_id)],
+          }) as any;
+          maxMintingFee = terms.defaultMintingFee ?? BigInt(0);
+        } catch {
+          // PIL query failed — fall back to 1 WIP so the call still has a chance to succeed
+          maxMintingFee = BigInt(10) ** BigInt(18);
+        }
+      }
+
       let response: any;
       if (params.license_token_id) {
         // License token path — derivData not needed
@@ -599,14 +626,15 @@ export const registerWorkTool = {
           ipMetadata: ipMetadataParam,
         });
       } else {
-        // Standard derivative path — use derivData with parent's license terms
+        // Standard derivative path — use derivData with parent's license terms.
+        // maxMintingFee is the actual fee from PIL, not a hardcoded cap.
         response = await client.ipAsset.registerDerivativeIpAsset({
           nft: nftParam,
           derivData: {
             parentIpIds: [params.parent_ip_id as Address],
             licenseTermsIds: [BigInt(params.parent_license_terms_id!)],
-            maxMintingFee: BigInt(10) ** BigInt(18), // 1 WIP max
-            maxRts: 100_000_000,       // number, not bigint (SDK type)
+            maxMintingFee,
+            maxRts: 100_000_000,
             maxRevenueShare: 100,
           },
           ipMetadata: ipMetadataParam,

@@ -72,7 +72,6 @@ describe('register_derivative', { timeout: 120_000 }, () => {
       content: 'Extended validator utilities with extra sorting methods',
       type: 'code',
       parent_ip_id: code.ipId,
-      parent_license_terms_id: code.licenseTermsIds![0],
       license_token_id: mintResult.licenseTokenIds?.[0],
     });
 
@@ -121,5 +120,45 @@ describe('register_derivative', { timeout: 120_000 }, () => {
         `Unexpected error: ${result.error}`,
       );
     }
+  });
+
+  // --- Validation: exactly one of parent_license_terms_id or license_token_id ---
+  it('rejects when both parent_license_terms_id and license_token_id provided', async () => {
+    const config = loadTestConfig('test-developer');
+    const result = await registerWorkTool.registerDerivative(config, {
+      title: 'Should fail',
+      content: 'Both params',
+      type: 'code',
+      parent_ip_id: fixtures['test-developer-code'].ipId,
+      parent_license_terms_id: '1',
+      license_token_id: '999',
+    });
+    assert.equal(result.success, false);
+    assert.ok(result.error?.includes('only one'), `Expected "only one" error, got: ${result.error}`);
+  });
+
+  it('rejects when neither parent_license_terms_id nor license_token_id provided', async () => {
+    const config = loadTestConfig('test-developer');
+    const result = await registerWorkTool.registerDerivative(config, {
+      title: 'Should fail',
+      content: 'No params',
+      type: 'code',
+      parent_ip_id: fixtures['test-developer-code'].ipId,
+    });
+    assert.equal(result.success, false);
+    assert.ok(result.error?.includes('Either'), `Expected "Either" error, got: ${result.error}`);
+  });
+
+  it('rejects non-numeric license_token_id', async () => {
+    const config = loadTestConfig('test-developer');
+    const result = await registerWorkTool.registerDerivative(config, {
+      title: 'Should fail',
+      content: 'Bad token ID',
+      type: 'code',
+      parent_ip_id: fixtures['test-developer-code'].ipId,
+      license_token_id: 'not-a-number',
+    });
+    assert.equal(result.success, false);
+    assert.ok(result.error?.includes('numeric'), `Expected "numeric" error, got: ${result.error}`);
   });
 });

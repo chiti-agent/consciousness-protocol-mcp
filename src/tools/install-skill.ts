@@ -15,9 +15,9 @@
  */
 
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { homedir } from 'node:os';
-import { execSync } from 'node:child_process';
+import { execFileSync } from 'node:child_process';
 import type { Config } from '../config/store.js';
 import { searchTool } from './search.js';
 import { licenseTool } from './license.js';
@@ -34,6 +34,19 @@ interface InstallResult {
   source?: 'git' | 'npm' | 'pip' | 'cargo' | 'go' | 'content';
   error?: string;
   instructions?: string;
+}
+
+/** Validate that install path resolves under the allowed base directory */
+function validateInstallPath(requestedPath: string, baseDir: string): string {
+  const resolved = resolve(requestedPath);
+  const resolvedBase = resolve(baseDir);
+  if (!resolved.startsWith(resolvedBase + '/') && resolved !== resolvedBase) {
+    throw new Error(
+      `Install path "${requestedPath}" resolves outside allowed directory "${resolvedBase}". ` +
+      'Path traversal is not permitted.',
+    );
+  }
+  return resolved;
 }
 
 /** Derive a filesystem-safe skill name from title */
@@ -87,7 +100,7 @@ const PACKAGE_PATTERNS: Record<string, RegExp> = {
 /** Clone a git repo to the target directory */
 function gitClone(url: string, targetDir: string): void {
   const cleanUrl = url.replace(/\/+$/, '');
-  execSync(`git clone --depth 1 ${cleanUrl} ${targetDir}`, {
+  execFileSync('git', ['clone', '--depth', '1', cleanUrl, targetDir], {
     stdio: 'pipe',
     timeout: 60_000,
   });
@@ -95,13 +108,25 @@ function gitClone(url: string, targetDir: string): void {
 
 /** Install a package from a registry */
 function registryInstall(manager: 'npm' | 'pip' | 'cargo' | 'go', packageName: string, targetDir: string): void {
-  const commands: Record<string, string> = {
-    npm: `npm install --prefix ${targetDir} ${packageName}`,
-    pip: `pip install --target ${targetDir} ${packageName}`,
-    cargo: `cargo install --root ${targetDir} ${packageName}`,
-    go: `GOBIN=${targetDir}/bin go install ${packageName}@latest`,
+  const args: Record<string, string[]> = {
+    npm: ['install', '--prefix', targetDir, packageName],
+    pip: ['install', '--target', targetDir, packageName],
+    cargo: ['install', '--root', targetDir, packageName],
+    go: ['install', `${packageName}@latest`],
   };
-  execSync(commands[manager], { stdio: 'pipe', timeout: 120_000 });
+
+  const opts: Record<string, object> = {
+    npm: { stdio: 'pipe' as const, timeout: 120_000 },
+    pip: { stdio: 'pipe' as const, timeout: 120_000 },
+    cargo: { stdio: 'pipe' as const, timeout: 120_000 },
+    go: {
+      stdio: 'pipe' as const,
+      timeout: 120_000,
+      env: { ...process.env, GOBIN: join(targetDir, 'bin') },
+    },
+  };
+
+  execFileSync(manager, args[manager], opts[manager]);
 }
 
 /** Write a minimal SKILL.md if one doesn't exist */
@@ -146,7 +171,10 @@ export const installSkillTool = {
 
     // 0. Quick check: already installed?
     const earlySlug = slugify(`skill-${ip_id.slice(2, 12)}`);
-    const earlyPath = params.install_path ?? join(SKILLS_DIR, earlySlug);
+    const earlyPath = validateInstallPath(
+      params.install_path ?? join(SKILLS_DIR, earlySlug),
+      SKILLS_DIR,
+    );
     if (existsSync(earlyPath)) {
       const hasSkillMd = existsSync(join(earlyPath, 'SKILL.md'));
       const hasPkgJson = existsSync(join(earlyPath, 'package.json'));
@@ -236,9 +264,12 @@ export const installSkillTool = {
       }
     }
 
-    // 4. Determine install path
+    // 4. Determine install path (validated against path traversal)
     const skillSlug = slugify(title);
-    const installPath = params.install_path ?? join(SKILLS_DIR, skillSlug);
+    const installPath = validateInstallPath(
+      params.install_path ?? join(SKILLS_DIR, skillSlug),
+      SKILLS_DIR,
+    );
 
     // Check if already installed
     if (existsSync(installPath)) {

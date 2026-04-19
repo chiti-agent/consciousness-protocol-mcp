@@ -84,7 +84,7 @@ export const verifyProvenanceTool = {
         }
       }
 
-      if (licenseTermsId) {
+      if (licenseTermsId && /^\d+$/.test(licenseTermsId)) {
         try {
           const PIL = '0x2E896b0b2Fdb7457499B56AAaA4AE55BCB4Cd316' as Address;
           const terms = await evmClient.readContract({
@@ -122,6 +122,9 @@ export const verifyProvenanceTool = {
       const contentHash = ipfsMetadata?.attributes?.find((a: any) => a.key === 'content_hash')?.value;
       const aiGenerated = ipfsMetadata?.attributes?.find((a: any) => a.key === 'ai_generated')?.value;
       const mediaUrl = ipfsMetadata?.mediaUrl;
+
+      // Verify hash match: NEAR-published hash must match IPFS chain_hash
+      const hashMatch = nearInfo && chainHash && (nearInfo.hash === chainHash || nearInfo.last_hash === chainHash);
 
       // Build response for agent
       const result: any = {
@@ -171,7 +174,8 @@ export const verifyProvenanceTool = {
           chainHash: chainHash || null,
           nearAccount: nearAccount || null,
           nearAgent: nearInfo,
-          verified: !!(chainSeq && nearInfo),
+          hashMatch: !!hashMatch,
+          verified: !!(chainSeq && nearInfo && hashMatch),
         },
       };
 
