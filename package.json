@@ -52,6 +52,7 @@
   ],
   "author": "Chiti + Ivan Medvedev",
   "license": "MIT",
+  "packageManager": "yarn@1.22.22",
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.27.1",
     "@story-protocol/core-sdk": "^1.4.4",
