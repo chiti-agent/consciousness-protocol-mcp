@@ -193,14 +193,14 @@ async function fetchAllOwnIps(config: Config): Promise<Array<{ ipId: string; tit
 }
 
 /** Find direct children of a given IP from registrations. */
-function findDirectChildren(registrations: Registration[], parentIpId: string): Registration[] {
+export function findDirectChildren(registrations: Registration[], parentIpId: string): Registration[] {
   return registrations.filter(
     (r) => r.success && r.parentIpId === parentIpId && r.ipId,
   );
 }
 
 /** Recursively find all descendants (children, grandchildren, ...) for display. */
-function findAllDescendants(registrations: Registration[], parentIpId: string): Registration[] {
+export function findAllDescendants(registrations: Registration[], parentIpId: string): Registration[] {
   const directChildren = findDirectChildren(registrations, parentIpId);
   const allDescendants: Registration[] = [...directChildren];
   for (const child of directChildren) {
@@ -225,8 +225,35 @@ function findChildrenFromFile(ipId: string, recursive: boolean): string[] {
 }
 
 /** Resolve Volem API base URL from config, env, or default. */
-function resolveVolemApiUrl(config: Config): string {
+export function resolveVolemApiUrl(config: Config): string {
   return config.volemApiUrl ?? process.env.VOLEM_API_URL ?? 'http://localhost:3010';
+}
+
+/** Per-child royalty-share math. revSharePct is a percentage (e.g. 10 for 10%). */
+export function computeChildRevShare(
+  childRevenue: bigint,
+  transferred: bigint,
+  revSharePct: number,
+): { expected: bigint; pending: bigint } {
+  const revShareBps = Math.round(revSharePct * 100); // basis points, integer-safe for BigInt
+  const expected = (childRevenue * BigInt(revShareBps)) / BigInt(10000);
+  const pending = expected > transferred ? expected - transferred : BigInt(0);
+  return { expected, pending };
+}
+
+/** Aggregate financial summary for an IP's revenue. All values in wei (bigint). */
+export function computeFinancialSummary(input: {
+  totalReceived: bigint;
+  claimable: bigint;
+  revenueShareTransferred: bigint;
+  revenueSharePending: bigint;
+}): { mintingFeeEarned: bigint; claimableNow: bigint; totalEarned: bigint } {
+  const { totalReceived, claimable, revenueShareTransferred, revenueSharePending } = input;
+  const mintingFeeEarned =
+    totalReceived > revenueShareTransferred ? totalReceived - revenueShareTransferred : totalReceived;
+  const claimableNow = claimable + revenueSharePending;
+  const totalEarned = mintingFeeEarned + revenueShareTransferred + revenueSharePending;
+  return { mintingFeeEarned, claimableNow, totalEarned };
 }
 
 /**
@@ -396,7 +423,6 @@ export const royaltyTool = {
         // The on-chain LAP contract enforces the actual percentage regardless of
         // what we display here; this is only used for the estimated pending calc.
         const revenueSharePct = await getRevShareForIp(publicClient, childIpId as `0x${string}`) ?? 10;
-        const revShareBps = Math.round(revenueSharePct * 100); // basis points (integer-safe for BigInt)
 
         try {
           const [childRevenue, transferred] = await Promise.all([
@@ -415,8 +441,7 @@ export const royaltyTool = {
           ]);
 
           // Expected revenue share based on actual percentage from license terms
-          const expected = childRevenue * BigInt(revShareBps) / BigInt(10000);
-          const pending = expected > transferred ? expected - transferred : BigInt(0);
+          const { pending } = computeChildRevShare(childRevenue, transferred, revenueSharePct);
 
           revenueShareTransferred += transferred;
           revenueSharePending += pending;
@@ -438,14 +463,12 @@ export const royaltyTool = {
       }
 
       // --- Financial summary ---
-      // mintingFeeEarned = total received minus rev share already transferred in
-      const mintingFeeEarned = totalReceived > revenueShareTransferred
-        ? totalReceived - revenueShareTransferred
-        : totalReceived;
-      // claimableNow = vault claimable (from snapshot) + pending rev share from direct children
-      const claimableNow = claimable + revenueSharePending;
-      // totalEarned = minting fees + all revenue share (received + pending)
-      const totalEarned = mintingFeeEarned + revenueShareTransferred + revenueSharePending;
+      const { mintingFeeEarned, claimableNow, totalEarned } = computeFinancialSummary({
+        totalReceived,
+        claimable,
+        revenueShareTransferred,
+        revenueSharePending,
+      });
 
       return {
         success: true,
