@@ -1,0 +1,35 @@
+# Keep the build context small and prevent host artifacts / secrets from leaking
+# into the image. The Dockerfile COPYs only the paths it needs, but Railway ships
+# the whole context — excluding these matters for speed and safety.
+
+# Host build outputs (rebuilt inside the image)
+node_modules/
+dist/
+*.tsbuildinfo
+
+# VCS / tooling / indexes
+.git/
+.gitignore
+.gitnexus/
+.claude/
+.github/
+
+# Tests & docs (not needed at runtime)
+tests/
+docs/
+*.md
+
+# Secrets & local state (must never enter an image layer)
+.env
+.env.*
+**/.consciousness-protocol/
+keys/
+states/
+data/
+
+# OS / editor cruft
+.DS_Store
+*.swp
+*.swo
+*~
+*.log

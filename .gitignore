@@ -7,3 +7,6 @@ dist/
 .env
 .gitnexus
 package-lock.json
+
+# Agent task diaries (local, never committed)
+.tasks/
