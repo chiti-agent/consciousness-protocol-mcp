@@ -13,6 +13,8 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { z } from 'zod';
+import { TokenBucketRateLimiter, clientKeyFromForwarded } from './rate-limit.js';
+import { createLogger } from './logger.js';
 
 import { registerWorkTool } from './tools/register-work.js';
 import { nearTools } from './tools/near.js';
@@ -20,11 +22,6 @@ import { chainTools } from './tools/chain.js';
 import { verifyProvenanceTool } from './tools/verify.js';
 import { searchTool } from './tools/search.js';
 import { loadConfig, type Config } from './config/store.js';
-
-const server = new McpServer({
-  name: 'consciousness-protocol',
-  version: '0.1.0',
-});
 
 // Load config (or return null if not set up yet)
 let config: Config | null = null;
@@ -34,9 +31,23 @@ try {
   // Not configured yet — setup tool will handle this
 }
 
-// ─── Setup Tool ───
+/**
+ * Build a fully-configured MCP server instance with all tools registered.
+ *
+ * IMPORTANT: each MCP `Server`/`Protocol` instance can be connected to exactly
+ * one transport (the SDK's `Protocol.connect` throws "Already connected to a
+ * transport" on a second connect). In HTTP mode we therefore create a fresh
+ * server per session instead of sharing one singleton across requests.
+ */
+function buildServer(): McpServer {
+  const server = new McpServer({
+    name: 'consciousness-protocol',
+    version: '0.1.0',
+  });
 
-server.tool(
+  // ─── Setup Tool ───
+
+  server.tool(
   'setup',
   'Initialize the protocol: create or import NEAR account, EVM wallet, and IPFS config. Run this first.',
   {
@@ -307,7 +318,10 @@ server.tool(
     const result = await installSkillTool.install(config, params);
     return { content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }] };
   },
-);
+  );
+
+  return server;
+}
 
 // ─── Start Server ───
 
@@ -316,72 +330,299 @@ const useHttp = process.argv.includes('--http') || process.env.MCP_TRANSPORT ===
 async function main() {
   if (useHttp) {
     const { createServer } = await import('node:http');
-    const { randomUUID } = await import('node:crypto');
+    const { randomUUID, timingSafeEqual } = await import('node:crypto');
+
+    // Structured logger for the HTTP transport path. Writes JSON-lines to
+    // stderr. The `base` field tags every record so log consumers can filter
+    // to this transport without inspecting the message text.
+    const log = createLogger({ base: { transport: 'http' } });
 
     const PORT = parseInt(process.env.MCP_PORT ?? '3020', 10);
+
+    // ── Rate limiting ──────────────────────────────────────────────────────
+    // Read configuration from environment with safe fallbacks.
+    const rateLimitDisabled =
+      process.env.MCP_RATE_LIMIT_DISABLED === '1' ||
+      process.env.MCP_RATE_LIMIT_DISABLED === 'true';
+
+    const rateLimitCapacity = (() => {
+      const v = parseInt(process.env.MCP_RATE_LIMIT_CAPACITY ?? '', 10);
+      return isNaN(v) ? 120 : v;
+    })();
+
+    const rateLimitRefillPerSec = (() => {
+      const v = parseFloat(process.env.MCP_RATE_LIMIT_REFILL_PER_SEC ?? '');
+      return isNaN(v) ? 2 : v;
+    })();
+
+    const limiter = rateLimitDisabled
+      ? null
+      : new TokenBucketRateLimiter({
+          capacity: rateLimitCapacity,
+          refillPerSec: rateLimitRefillPerSec,
+        });
+
+    // ── API-key auth ───────────────────────────────────────────────────────
+    // When MCP_API_KEY is set, every /mcp request must present a matching key
+    // via either `Authorization: Bearer <key>` or `X-API-Key: <key>`. When it
+    // is unset/empty, auth is disabled to preserve local-dev behaviour. The
+    // check runs after rate limiting so an unauthenticated flood is throttled
+    // before it can probe the key, and after the health probes so they stay
+    // reachable without a key.
+    const apiKey = process.env.MCP_API_KEY ?? '';
+    const authEnabled = apiKey.length > 0;
+    const apiKeyBuf = Buffer.from(apiKey);
+
+    // Constant-time comparison. timingSafeEqual throws on unequal lengths, so
+    // guard the length first (a length mismatch is already a non-match).
+    const keyMatches = (presented: string | undefined): boolean => {
+      if (!presented) return false;
+      const presentedBuf = Buffer.from(presented);
+      if (presentedBuf.length !== apiKeyBuf.length) return false;
+      return timingSafeEqual(presentedBuf, apiKeyBuf);
+    };
+
+    const extractKey = (req: import('node:http').IncomingMessage): string | undefined => {
+      const authHeader = req.headers['authorization'];
+      if (typeof authHeader === 'string' && authHeader.startsWith('Bearer ')) {
+        return authHeader.slice('Bearer '.length).trim();
+      }
+      const xApiKey = req.headers['x-api-key'];
+      if (typeof xApiKey === 'string') return xApiKey.trim();
+      if (Array.isArray(xApiKey) && xApiKey.length > 0) return xApiKey[0].trim();
+      return undefined;
+    };
 
     // Map of session ID → transport instance
     const sessions = new Map<string, StreamableHTTPServerTransport>();
 
     const httpServer = createServer(async (req, res) => {
-      const url = new URL(req.url ?? '/', `http://localhost:${PORT}`);
+      // Defense-in-depth: this listener is async, so any rejection it leaks
+      // becomes an unhandled promise rejection that terminates the process
+      // (exit code 1). Wrap the whole body and answer with a 500 instead of
+      // letting the server die when the transport (or server.connect) throws.
+      try {
+        const url = new URL(req.url ?? '/', `http://localhost:${PORT}`);
 
-      if (url.pathname !== '/mcp') {
-        res.writeHead(404, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ error: 'Not found. Use /mcp endpoint.' }));
-        return;
-      }
+        // ── Health / readiness probes (no auth, no rate-limit, no session) ──
+        // These run before every other check so orchestrators (k8s, docker) can
+        // poll them freely without consuming rate-limit tokens or requiring an
+        // MCP session. No logging here — these are called frequently.
+        if (url.pathname === '/health' || url.pathname === '/ready') {
+          if (req.method !== 'GET' && req.method !== 'HEAD') {
+            res.writeHead(405, { 'Content-Type': 'application/json', 'Allow': 'GET, HEAD' });
+            res.end(JSON.stringify({ error: 'Method not allowed' }));
+            return;
+          }
 
-      // Handle DELETE for session cleanup
-      if (req.method === 'DELETE') {
+          let status: number;
+          let body: string;
+
+          if (url.pathname === '/health') {
+            status = 200;
+            body = JSON.stringify({ status: 'ok' });
+          } else {
+            // /ready: 503 while draining, 200 otherwise
+            if (shuttingDown) {
+              status = 503;
+              body = JSON.stringify({ status: 'shutting_down' });
+            } else {
+              status = 200;
+              body = JSON.stringify({ status: 'ready' });
+            }
+          }
+
+          res.writeHead(status, { 'Content-Type': 'application/json' });
+          // HEAD: send headers only, no body
+          res.end(req.method === 'HEAD' ? undefined : body);
+          return;
+        }
+
+        if (url.pathname !== '/mcp') {
+          res.writeHead(404, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'Not found. Use /mcp endpoint.' }));
+          return;
+        }
+
+        // ── Per-IP rate limiting ───────────────────────────────────────────
+        // SECURITY: default to the socket address as the client key. Do NOT
+        // trust X-Forwarded-For unless MCP_TRUST_PROXY=1 is explicitly set — it
+        // is client-controlled and trivially spoofable. When a single trusted
+        // proxy IS declared, clientKeyFromForwarded reads the rightmost (proxy-
+        // appended) hop, never the client-supplied leftmost ones, so an
+        // attacker cannot rotate the key to bypass the limit. See its docstring.
+        if (limiter !== null) {
+          const clientKey = clientKeyFromForwarded(
+            req.headers['x-forwarded-for'],
+            req.socket.remoteAddress,
+            process.env.MCP_TRUST_PROXY === '1',
+          );
+
+          const { allowed, retryAfterSec } = limiter.tryRemove(clientKey);
+          if (!allowed) {
+            res.writeHead(429, {
+              'Content-Type': 'application/json',
+              'Retry-After': String(retryAfterSec),
+            });
+            res.end(
+              JSON.stringify({
+                jsonrpc: '2.0',
+                error: { code: -32000, message: 'Rate limit exceeded' },
+                id: null,
+              }),
+            );
+            return;
+          }
+        }
+
+        // ── Authenticate (covers GET/POST/DELETE on /mcp) ──────────────────
+        // Runs after rate limiting and after the health probes above.
+        if (authEnabled && !keyMatches(extractKey(req))) {
+          res.writeHead(401, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'Unauthorized' }));
+          return;
+        }
+
+        // Handle DELETE for session cleanup
+        if (req.method === 'DELETE') {
+          const sessionId = req.headers['mcp-session-id'] as string | undefined;
+          if (sessionId && sessions.has(sessionId)) {
+            const transport = sessions.get(sessionId)!;
+            await transport.close();
+            sessions.delete(sessionId);
+            res.writeHead(200);
+            res.end();
+          } else {
+            res.writeHead(404);
+            res.end();
+          }
+          return;
+        }
+
+        // For GET/POST: route to existing session or create new one
         const sessionId = req.headers['mcp-session-id'] as string | undefined;
+
         if (sessionId && sessions.has(sessionId)) {
           const transport = sessions.get(sessionId)!;
-          await transport.close();
-          sessions.delete(sessionId);
-          res.writeHead(200);
-          res.end();
-        } else {
-          res.writeHead(404);
-          res.end();
+          await transport.handleRequest(req, res);
+          return;
         }
-        return;
-      }
 
-      // For GET/POST: route to existing session or create new one
-      const sessionId = req.headers['mcp-session-id'] as string | undefined;
+        // New session: create a transport AND a fresh server instance.
+        // Each MCP server can be connected to exactly one transport, so a
+        // shared singleton would throw "Already connected to a transport" on
+        // the second session. Build one server per session.
+        //
+        // The transport's sessionId is assigned only while it processes the
+        // initialize message inside handleRequest(), NOT during connect(). We
+        // therefore register the session from the onsessioninitialized callback,
+        // which the SDK fires exactly when the sessionId is assigned. Reading
+        // transport.sessionId before handleRequest() would always be undefined,
+        // leaving the sessions map empty and breaking session reuse.
+        const transport = new StreamableHTTPServerTransport({
+          sessionIdGenerator: () => randomUUID(),
+          onsessioninitialized: (sessionId) => {
+            sessions.set(sessionId, transport);
+          },
+        });
 
-      if (sessionId && sessions.has(sessionId)) {
-        const transport = sessions.get(sessionId)!;
+        transport.onclose = () => {
+          if (transport.sessionId) {
+            sessions.delete(transport.sessionId);
+          }
+        };
+
+        const sessionServer = buildServer();
+        await sessionServer.connect(transport);
+
         await transport.handleRequest(req, res);
-        return;
-      }
-
-      // New session: create transport and connect a fresh server instance
-      const transport = new StreamableHTTPServerTransport({
-        sessionIdGenerator: () => randomUUID(),
-      });
-
-      transport.onclose = () => {
-        if (transport.sessionId) {
-          sessions.delete(transport.sessionId);
+      } catch (err) {
+        log.error('HTTP request handler error', { err });
+        if (!res.headersSent) {
+          res.writeHead(500, { 'Content-Type': 'application/json' });
+          res.end(
+            JSON.stringify({
+              jsonrpc: '2.0',
+              error: { code: -32603, message: 'Internal server error' },
+              id: null,
+            }),
+          );
+        } else if (!res.writableEnded) {
+          res.end();
         }
-      };
-
-      await server.connect(transport);
-
-      if (transport.sessionId) {
-        sessions.set(transport.sessionId, transport);
       }
-
-      await transport.handleRequest(req, res);
     });
+
+    if (limiter !== null) {
+      const sweepTimer = setInterval(() => limiter.sweep(), 60_000);
+      sweepTimer.unref();
+      httpServer.on('close', () => clearInterval(sweepTimer));
+    }
 
     httpServer.listen(PORT, () => {
-      console.error(`MCP server listening on http://localhost:${PORT}/mcp (Streamable HTTP)`);
+      log.info(`MCP server listening on http://localhost:${PORT}/mcp`, { port: PORT, mode: 'streamable-http' });
     });
+
+    // ── Graceful shutdown ──────────────────────────────────────────────────
+    // Parse shutdown timeout from env using the same safe pattern as rateLimitCapacity above.
+    const SHUTDOWN_TIMEOUT_MS = (() => {
+      const v = parseInt(process.env.MCP_SHUTDOWN_TIMEOUT_MS ?? '', 10);
+      return isNaN(v) ? 10_000 : v;
+    })();
+
+    let shuttingDown = false;
+
+    const shutdown = (signal: string): void => {
+      if (shuttingDown) {
+        // Second signal while drain is in progress — force exit immediately.
+        log.warn('Received signal again during shutdown — forcing exit', { signal });
+        process.exit(1);
+      }
+      shuttingDown = true;
+      log.info('Received signal, shutting down gracefully', { signal });
+
+      // Backstop: if drain takes too long, kill the process anyway.
+      const forceTimer = setTimeout(() => {
+        log.error('Graceful shutdown timed out — forcing exit', { timeoutMs: SHUTDOWN_TIMEOUT_MS });
+        process.exit(1);
+      }, SHUTDOWN_TIMEOUT_MS);
+      forceTimer.unref();
+
+      // Close active transports first; long-lived SSE GET streams hold open
+      // keep-alive connections that prevent httpServer.close() from completing.
+      for (const transport of sessions.values()) {
+        transport.close().catch((e) => log.error('Error closing transport', { err: e }));
+      }
+      sessions.clear();
+
+      // Stop accepting new connections; callback fires when all existing
+      // connections have closed.
+      httpServer.close((err) => {
+        if (err) log.error('Error closing HTTP server', { err });
+        clearTimeout(forceTimer);
+        log.info('Shutdown complete');
+        process.exit(0);
+      });
+
+      // transport.close() tears down the SDK's web ReadableStream but does NOT
+      // close the underlying Node socket of a standalone GET SSE stream (the
+      // @hono/node-server bridge leaves it open). Those lingering keep-alive
+      // sockets would otherwise block httpServer.close() until the backstop
+      // timer forced exit code 1. Forcibly close them so close() can complete.
+      //
+      // closeAllConnections() exists on Node >= 18.2.0; engines only requires
+      // >= 18.0.0, so optional-chain it. On 18.0.x–18.1.x it is absent and the
+      // call no-ops, degrading to the backstop timer rather than throwing.
+      httpServer.closeAllConnections?.();
+    };
+
+    // Use process.on (not .once) so a second signal hits the same handler and
+    // triggers the force-exit branch above instead of re-invoking shutdown.
+    process.on('SIGTERM', () => shutdown('SIGTERM'));
+    process.on('SIGINT', () => shutdown('SIGINT'));
   } else {
     const transport = new StdioServerTransport();
+    const server = buildServer();
     await server.connect(transport);
   }
 }

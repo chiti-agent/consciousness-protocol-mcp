@@ -1,0 +1,35 @@
+# Railway config-as-code for the hosted MCP service.
+# Reference: https://docs.railway.com/reference/config-as-code
+#
+# NOTE: Volumes are NOT expressible here — the config-as-code schema only covers
+# [build] and [deploy]. Create the persistent volume via the Railway dashboard or
+# CLI and mount it at /home/node/.consciousness-protocol
+# (see docs/deploy-runbook.md, step "Persistent state").
+#
+# PREREQUISITE: healthcheckPath below points at /healthz, which does NOT exist in
+# the current server. Apply the code prerequisites in docs/deploy-runbook.md
+# (multi-session crash fix + /healthz + bearer auth) BEFORE deploying, or the
+# health check — and the deployment — will fail.
+
+[build]
+builder = "DOCKERFILE"
+dockerfilePath = "Dockerfile"
+
+[deploy]
+# Liveness probe — a tiny, unauthenticated 200 OK endpoint (NOT /mcp, which
+# requires an MCP session handshake).
+healthcheckPath = "/healthz"
+healthcheckTimeout = 30
+
+# Restart on crash, but cap retries so a hard misconfig (e.g. bad key) surfaces
+# instead of crash-looping forever.
+restartPolicyType = "ON_FAILURE"
+restartPolicyMaxRetries = 5
+
+# MUST stay 1. Two hard constraints both force single-instance:
+#   1. Railway volumes are incompatible with replicas ("Replicas cannot be used
+#      with volumes").
+#   2. The Streamable HTTP transport keeps sessions in process memory; a second
+#      replica would not see another replica's mcp-session-id.
+# Horizontal scale requires externalizing both state and sessions first.
+numReplicas = 1
