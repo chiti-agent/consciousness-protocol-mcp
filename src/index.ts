@@ -330,7 +330,7 @@ const useHttp = process.argv.includes('--http') || process.env.MCP_TRANSPORT ===
 async function main() {
   if (useHttp) {
     const { createServer } = await import('node:http');
-    const { randomUUID } = await import('node:crypto');
+    const { randomUUID, timingSafeEqual } = await import('node:crypto');
 
     // Structured logger for the HTTP transport path. Writes JSON-lines to
     // stderr. The `base` field tags every record so log consumers can filter
@@ -361,6 +361,37 @@ async function main() {
           capacity: rateLimitCapacity,
           refillPerSec: rateLimitRefillPerSec,
         });
+
+    // ── API-key auth ───────────────────────────────────────────────────────
+    // When MCP_API_KEY is set, every /mcp request must present a matching key
+    // via either `Authorization: Bearer <key>` or `X-API-Key: <key>`. When it
+    // is unset/empty, auth is disabled to preserve local-dev behaviour. The
+    // check runs after rate limiting so an unauthenticated flood is throttled
+    // before it can probe the key, and after the health probes so they stay
+    // reachable without a key.
+    const apiKey = process.env.MCP_API_KEY ?? '';
+    const authEnabled = apiKey.length > 0;
+    const apiKeyBuf = Buffer.from(apiKey);
+
+    // Constant-time comparison. timingSafeEqual throws on unequal lengths, so
+    // guard the length first (a length mismatch is already a non-match).
+    const keyMatches = (presented: string | undefined): boolean => {
+      if (!presented) return false;
+      const presentedBuf = Buffer.from(presented);
+      if (presentedBuf.length !== apiKeyBuf.length) return false;
+      return timingSafeEqual(presentedBuf, apiKeyBuf);
+    };
+
+    const extractKey = (req: import('node:http').IncomingMessage): string | undefined => {
+      const authHeader = req.headers['authorization'];
+      if (typeof authHeader === 'string' && authHeader.startsWith('Bearer ')) {
+        return authHeader.slice('Bearer '.length).trim();
+      }
+      const xApiKey = req.headers['x-api-key'];
+      if (typeof xApiKey === 'string') return xApiKey.trim();
+      if (Array.isArray(xApiKey) && xApiKey.length > 0) return xApiKey[0].trim();
+      return undefined;
+    };
 
     // Map of session ID → transport instance
     const sessions = new Map<string, StreamableHTTPServerTransport>();
@@ -442,6 +473,14 @@ async function main() {
             );
             return;
           }
+        }
+
+        // ── Authenticate (covers GET/POST/DELETE on /mcp) ──────────────────
+        // Runs after rate limiting and after the health probes above.
+        if (authEnabled && !keyMatches(extractKey(req))) {
+          res.writeHead(401, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'Unauthorized' }));
+          return;
         }
 
         // Handle DELETE for session cleanup
