@@ -38,8 +38,15 @@ try {
  * one transport (the SDK's `Protocol.connect` throws "Already connected to a
  * transport" on a second connect). In HTTP mode we therefore create a fresh
  * server per session instead of sharing one singleton across requests.
+ *
+ * `allowInstallSkill` gates the `install_skill` tool. It installs to the host's
+ * `~/.claude/skills/` and may auto-mint a license from the host wallet — both
+ * are meaningful only for a local (stdio) caller. On a hosted HTTP server the
+ * filesystem and wallet are the SERVER's, so a remote caller triggering an
+ * install writes to the host and spends the host's funds. HTTP callers pass
+ * `false`; stdio passes `true`.
  */
-function buildServer(): McpServer {
+function buildServer({ allowInstallSkill }: { allowInstallSkill: boolean }): McpServer {
   const server = new McpServer({
     name: 'consciousness-protocol',
     version: '0.1.0',
@@ -303,22 +310,26 @@ server.tool(
 );
 
 // ─── Install Skill Tool ───
+// Local (stdio) only — see buildServer doc comment. Skipped on hosted HTTP so a
+// remote caller cannot write to the host filesystem or spend the host wallet.
 
-server.tool(
-  'install_skill',
-  'Install a skill/MCP/workflow from the marketplace. Discovers asset → checks license (auto-mints if needed) → downloads (git clone or IPFS) → installs to ~/.claude/skills/. Complete marketplace cycle in one call.',
-  {
-    ip_id: z.string().regex(/^0x[a-fA-F0-9]{40}$/, 'Must be a valid Ethereum address').describe('IP Asset ID to install (0x...)'),
-    install_path: z.string().optional().describe('Custom install path (default: ~/.claude/skills/{name})'),
-    auto_license: z.boolean().default(true).describe('Automatically mint license if required (default: true). Set false to skip.'),
-  },
-  async (params) => {
-    if (!config) return { content: [{ type: 'text' as const, text: 'Not configured. Run setup first.' }] };
-    const { installSkillTool } = await import('./tools/install-skill.js');
-    const result = await installSkillTool.install(config, params);
-    return { content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }] };
-  },
-  );
+  if (allowInstallSkill) {
+    server.tool(
+      'install_skill',
+      'Install a skill/MCP/workflow from the marketplace. Discovers asset → checks license (auto-mints if needed) → downloads (git clone or IPFS) → installs to ~/.claude/skills/. Complete marketplace cycle in one call.',
+      {
+        ip_id: z.string().regex(/^0x[a-fA-F0-9]{40}$/, 'Must be a valid Ethereum address').describe('IP Asset ID to install (0x...)'),
+        install_path: z.string().optional().describe('Custom install path (default: ~/.claude/skills/{name})'),
+        auto_license: z.boolean().default(true).describe('Automatically mint license if required (default: true). Set false to skip.'),
+      },
+      async (params) => {
+        if (!config) return { content: [{ type: 'text' as const, text: 'Not configured. Run setup first.' }] };
+        const { installSkillTool } = await import('./tools/install-skill.js');
+        const result = await installSkillTool.install(config, params);
+        return { content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }] };
+      },
+    );
+  }
 
   return server;
 }
@@ -532,7 +543,7 @@ async function main() {
           }
         };
 
-        const sessionServer = buildServer();
+        const sessionServer = buildServer({ allowInstallSkill: false });
         await sessionServer.connect(transport);
 
         await transport.handleRequest(req, res);
@@ -622,7 +633,7 @@ async function main() {
     process.on('SIGINT', () => shutdown('SIGINT'));
   } else {
     const transport = new StdioServerTransport();
-    const server = buildServer();
+    const server = buildServer({ allowInstallSkill: true });
     await server.connect(transport);
   }
 }

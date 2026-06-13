@@ -261,3 +261,51 @@ describe('HTTP transport — second session must not crash the process', () => {
     }
   });
 });
+
+/**
+ * install_skill hardening: the tool installs to the host's ~/.claude/skills/ and
+ * can auto-mint a license from the host wallet. On a hosted HTTP server both the
+ * filesystem and the wallet belong to the SERVER, so a remote caller must not be
+ * able to reach it. buildServer({ allowInstallSkill: false }) is used on the HTTP
+ * path; this test asserts the tool is absent from tools/list over HTTP.
+ */
+describe('HTTP transport — install_skill is gated off (hosted hardening)', () => {
+  it('tools/list does not advertise install_skill in http mode', async () => {
+    const port = await getFreePort();
+    const local = await spawnServer(port);
+    try {
+      const init = await sendRequest(port, { headers: JSON_HEADERS, body: INIT_BODY });
+      assert.equal(init.status, 200, 'initialize should return 200');
+      const sessionId = init.sessionId!;
+      assert.ok(sessionId && sessionId.length > 0, 'server must return an mcp-session-id');
+      await delay(100);
+
+      const sessionHeaders = { ...JSON_HEADERS, 'mcp-session-id': sessionId };
+      await sendRequest(port, {
+        headers: sessionHeaders,
+        body: JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized' }),
+      });
+      await delay(100);
+
+      const toolsList = await sendRequest(port, {
+        headers: sessionHeaders,
+        body: JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'tools/list', params: {} }),
+      });
+      await delay(150);
+
+      assert.equal(toolsList.status, 200, `tools/list should return 200, got ${toolsList.status}`);
+      // Sanity: a normal tool IS listed, so an empty/garbled body can't make the
+      // negative assertion pass vacuously.
+      assert.ok(
+        toolsList.body.includes('verify_chain'),
+        'tools/list must advertise the normal tools (sanity anchor verify_chain missing)',
+      );
+      assert.ok(
+        !toolsList.body.includes('install_skill'),
+        'install_skill must NOT be exposed over HTTP — it writes to the host fs and spends the host wallet',
+      );
+    } finally {
+      local.child.kill('SIGKILL');
+    }
+  });
+});
