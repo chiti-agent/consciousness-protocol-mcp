@@ -6,19 +6,22 @@
 # CLI and mount it at /home/node/.consciousness-protocol
 # (see docs/deploy-runbook.md, step "Persistent state").
 #
-# PREREQUISITE: healthcheckPath below points at /healthz, which does NOT exist in
-# the current server. Apply the code prerequisites in docs/deploy-runbook.md
-# (multi-session crash fix + /healthz + bearer auth) BEFORE deploying, or the
-# health check — and the deployment — will fail.
+# DEPLOY PREREQUISITES (all landed in main): multi-session crash fix
+# (per-session buildServer), bearer/API-key auth on /mcp (MCP_API_KEY), and the
+# unauthenticated liveness endpoint below. See docs/deploy-runbook.md for the
+# operational checklist and the secrets required before the first deploy.
 
 [build]
 builder = "DOCKERFILE"
 dockerfilePath = "Dockerfile"
 
 [deploy]
-# Liveness probe — a tiny, unauthenticated 200 OK endpoint (NOT /mcp, which
-# requires an MCP session handshake).
-healthcheckPath = "/healthz"
+# Liveness probe — /health is a tiny, unauthenticated 200 OK endpoint served
+# before auth/rate-limit/session checks (src/index.ts). NOT /mcp, which requires
+# an MCP session handshake. (/ready also exists: 200 normally, 503 while draining
+# on SIGTERM — useful for zero-downtime drains, but Railway's deploy gate wants
+# plain liveness, so /health.)
+healthcheckPath = "/health"
 healthcheckTimeout = 30
 
 # Restart on crash, but cap retries so a hard misconfig (e.g. bad key) surfaces

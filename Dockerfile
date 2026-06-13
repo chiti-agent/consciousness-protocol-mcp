@@ -1,8 +1,9 @@
 # syntax=docker/dockerfile:1
 #
 # Hosted MCP image for consciousness-protocol-mcp (Streamable HTTP transport).
-# See docs/deploy-runbook.md for the full deploy procedure and the mandatory
-# code prerequisites (multi-session crash fix, /healthz, bearer auth).
+# See docs/deploy-runbook.md for the full deploy procedure. The code
+# prerequisites (multi-session crash fix, /health liveness probe, API-key auth)
+# are already in main.
 #
 # Multi-stage:
 #   builder -> full deps + `tsc` -> dist/
