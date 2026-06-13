@@ -8,5 +8,8 @@ dist/
 .gitnexus
 package-lock.json
 
+# macOS
+.DS_Store
+
 # Agent task diaries (local, never committed)
 .tasks/

@@ -4,17 +4,18 @@
 
 ---
 
-## ⛔ Pre-flight: НЕ ДЕПЛОИТЬ, пока не сделано
+## ✅ Pre-flight: code-блокеры закрыты в `main`
 
-Сервер в текущем `main` **нельзя** выставлять публично как есть. Три блокера (детали и патчи — в Приложении A):
+Все code prerequisites смёржены и покрыты тестами (`yarn test` → 102/102). Перед публичным деплоем осталось только подготовить секреты и сам Railway-сервис (разделы ниже). Детали реализации — в Приложении A.
 
-- [ ] **P1 — multi-session crash fix.** `main` держит один общий `McpServer` и зовёт `server.connect()` на каждую HTTP-сессию → краш на 2-й сессии (`Already connected`). Hosted = много сессий. **Без P1 сервер падает почти сразу.**
-- [ ] **P2 — bearer auth на `/mcp`.** Сейчас публичный URL = открытый доступ к кошельку (`pay_royalty`, `claim_revenue`, `register_work`). **Без P2 любой может потратить ваши деньги.**
-- [ ] **P3 — `/healthz`.** `railway.toml` указывает `healthcheckPath=/healthz`; эндпоинта в коде нет → health-check (и деплой) провалятся.
-- [ ] *(рекомендуется)* **P4** — отключить `install_skill` в http-режиме; **P5** — SIGTERM graceful shutdown.
-- [ ] После правок: `yarn build`, `yarn test` зелёный (включая HTTP-регресс-тесты), `gitnexus_impact`/`gitnexus_detect_changes`.
+- [x] **P1 — multi-session crash fix.** Per-session `buildServer()` + регистрация сессии в `onsessioninitialized` + try/catch вокруг listener. Регресс-тесты: `tests/http-transport.test.ts`.
+- [x] **P2 — auth на `/mcp`.** Env `MCP_API_KEY`: каждый `/mcp`-запрос обязан предъявить ключ через `Authorization: Bearer <key>` **или** `X-API-Key: <key>`, сравнение constant-time. Пустой/незаданный ключ = auth выключен (локальный dev). Тесты: `tests/http-auth.test.ts`. **⚠️ Переменная называется `MCP_API_KEY`, не `MCP_AUTH_TOKEN` — при неверном имени auth молча выключится и кошелёк станет открытым.**
+- [x] **P3 — health-проба.** `/health` (liveness, всегда 200, без auth/rate-limit/session) + `/ready` (200, либо 503 при draining). `railway.toml healthcheckPath=/health`. Тесты: `tests/health-ready.test.ts`.
+- [x] **P4 — `install_skill` снят в http-режиме.** `buildServer({ allowInstallSkill:false })` на HTTP-пути (запись в host-ФС + трата host-кошелька недопустимы для remote-вызывателя). Тест: `tests/http-transport.test.ts` («install_skill is gated off»).
+- [x] **P5 — SIGTERM graceful shutdown.** Дрейн сессий + `httpServer.close()`, таймаут `MCP_SHUTDOWN_TIMEOUT_MS`. Тесты: `tests/graceful-shutdown.test.ts`.
+- [x] **Rate limiting** смёржен: per-IP token-bucket (`MCP_RATE_LIMIT_*`), `MCP_TRUST_PROXY=1` за edge-proxy. Тесты: `tests/rate-limit*.test.ts`.
 
-> 💡 **P1 (и rate-limiting) скорее всего уже написаны.** Night-log фиксирует crash-fix (2026-06-04, 13/13 тестов) и rate-limiting (2026-06-06, 34/34) как `[done]`, но в `main` их нет (работа осталась в несохранённом working tree). Перед тем как писать P1 заново — поискать/восстановить ту работу. См. design-doc, раздел «Связь с незакоммиченной работой».
+> Перед коммитом правок в этот код: `yarn build` (рантайм из `dist/`), `yarn test`, `gitnexus_detect_changes`.
 
 ---
 
@@ -23,7 +24,7 @@
 - Аккаунт Railway (Hobby или Pro — volume 5GB/50GB; состояние крошечное, хватит Hobby).
 - `railway` CLI (`npm i -g @railway/cli`) **или** доступ к dashboard.
 - Готовые секреты: NEAR account + private key, EVM private key (оба **фундированы** на нужной сети), опц. Pinata JWT, опц. Story API key.
-- Сгенерированный `MCP_AUTH_TOKEN` (длинный случайный, напр. `openssl rand -hex 32` — генерировать **вне** этой сессии).
+- Сгенерированный `MCP_API_KEY` (длинный случайный, напр. `openssl rand -hex 32` — генерировать **вне** этой сессии).
 
 ## 1. Артефакты в репозитории (уже созданы)
 
@@ -32,18 +33,18 @@ Dockerfile                      # multi-stage, node:22-slim, tini+gosu, non-root
 .dockerignore
 docker/bootstrap.mjs            # env -> config.json + keys/* (reuse setupAgent)
 docker/docker-entrypoint.sh     # PORT map, chown volume, gosu drop, bootstrap+start
-railway.toml                    # DOCKERFILE builder, /healthz, ON_FAILURE, numReplicas=1
+railway.toml                    # DOCKERFILE builder, /health, ON_FAILURE, numReplicas=1
 ```
 
-## 2. Применить code prerequisites (P1–P3, см. Приложение A)
+## 2. Локальная проверка образа-режима (prerequisites уже в `main`)
 
-Применить патчи → `yarn build` (обязательно по `CLAUDE.md`: рантайм идёт из `dist/`) → `yarn test`. Локальная проверка HTTP-режима:
+`yarn build` (рантайм идёт из `dist/`) → `yarn test` (102/102). Дымовая проверка HTTP-режима локально:
 
 ```bash
-MCP_TRANSPORT=http MCP_PORT=3020 MCP_AUTH_TOKEN=test-token node dist/index.js --http
+MCP_TRANSPORT=http MCP_PORT=3020 MCP_API_KEY=test-token node dist/index.js --http
 # в другом терминале:
-#   GET /healthz без токена -> 200
-#   POST /mcp без токена    -> 401
+#   GET /health без ключа              -> 200 {"status":"ok"}
+#   POST /mcp без ключа                -> 401
 #   POST /mcp с Bearer test-token, два init подряд -> процесс жив (регресс P1)
 ```
 *(Проверки слать `node`-скриптом через `node:http`, не curl/python — см. `tests/http-transport.test.ts`.)*
@@ -72,7 +73,7 @@ Volume **нельзя** задать в `railway.toml` (схема config-as-cod
 | Variable | Обяз. | Пример / значение | Назначение |
 |---|---|---|---|
 | `MCP_TRANSPORT` | — | `http` (уже в образе) | режим транспорта |
-| `MCP_AUTH_TOKEN` | **да** 🔐 | `<openssl rand -hex 32>` | bearer-gate на `/mcp` (P2) |
+| `MCP_API_KEY` | **да** 🔐 | `<openssl rand -hex 32>` | bearer-gate на `/mcp` (P2) |
 | `CP_AGENT_NAME` | **да** | `chiti` (lowercase, `[a-z0-9_-]`) | имя агента |
 | `CP_NETWORK` | да | `testnet` \| `mainnet` | сеть NEAR/Story |
 | `CP_NEAR_ACCOUNT` | **да** | `chiti.testnet` | NEAR account id |
@@ -82,12 +83,13 @@ Volume **нельзя** задать в `railway.toml` (схема config-as-cod
 | `CP_PINATA_JWT` | опц. 🔐 | `eyJ...` | IPFS-загрузки (иначе free gateway) |
 | `CP_STORY_API_KEY` | опц. 🔐 | `...` | если `CP_BACKEND=story` |
 | `CP_VOLEM_API_URL` | опц. | `https://...` | только если реально есть hosted Volem |
-| `MCP_RATE_LIMIT_CAPACITY` | опц.¹ | `120` | per-IP token-bucket cap (если смёржен rate-limiting) |
-| `MCP_RATE_LIMIT_REFILL_PER_SEC` | опц.¹ | `2` | refill rate |
-| `MCP_RATE_LIMIT_DISABLED` | опц.¹ | — | выключить rate-limit |
-| `MCP_TRUST_PROXY` | опц.¹ | `1` | доверять X-Forwarded-For (Railway за edge-proxy); берётся rightmost hop |
+| `MCP_RATE_LIMIT_CAPACITY` | опц. | `120` | per-IP token-bucket cap |
+| `MCP_RATE_LIMIT_REFILL_PER_SEC` | опц. | `2` | refill rate |
+| `MCP_RATE_LIMIT_DISABLED` | опц. | — | выключить rate-limit |
+| `MCP_TRUST_PROXY` | реком.¹ | `1` | доверять X-Forwarded-For (Railway за edge-proxy); берётся rightmost hop |
+| `MCP_SHUTDOWN_TIMEOUT_MS` | опц. | `10000` | дедлайн graceful shutdown (P5) |
 
-¹ Из rate-limiting-работы (night-log 2026-06-06, `src/rate-limit.ts`, 34/34 теста) — **готова, но не в `main`**. Для публичного hosted endpoint рекомендуется смёржить вместе с P1. `MCP_TRUST_PROXY=1` на Railway корректен (сервис за edge-proxy), иначе все клиенты схлопнутся в один IP.
+¹ Rate-limiting в `main` (`src/rate-limit.ts`, тесты `tests/rate-limit*.test.ts`). На Railway задать `MCP_TRUST_PROXY=1` — сервис за edge-proxy, иначе все клиенты схлопнутся в один IP и token-bucket будет общим на всех.
 
 > Смена секрета: `bootstrap.mjs` перечитывает env и **перезаписывает** `config.json`+`keys/*` на каждом boot (env — источник истины). Достаточно поменять Variable и сделать redeploy. `chain.json`/`registrations.json` на volume не трогаются.
 
@@ -100,9 +102,9 @@ railway domain       # получить публичный https://<app>.railway
 ```
 
 Smoke (через MCP-клиент или `node:http`-скрипт):
-1. `GET https://<app>/healthz` (без токена) → **200** `{"status":"ok"}`.
+1. `GET https://<app>/health` (без токена) → **200** `{"status":"ok"}`.
 2. `POST https://<app>/mcp` **без** `Authorization` → **401**.
-3. MCP-handshake с `Authorization: Bearer <MCP_AUTH_TOKEN>`: `initialize` → `notifications/initialized` → `tools/list` (тот же `mcp-session-id`) → **200**, непустой список tools (18 в полном наборе; 17 если применён P4 — `install_skill` снят в http-режиме).
+3. MCP-handshake с `Authorization: Bearer <MCP_API_KEY>` (или `X-API-Key: <MCP_API_KEY>`): `initialize` → `notifications/initialized` → `tools/list` (тот же `mcp-session-id`) → **200**, **17 tools** в http-режиме (`install_skill` снят по P4; локально в stdio их 18).
 4. Второй `initialize` (новая сессия) → процесс **жив** (P1-регресс; до фикса тут был exit 1).
 5. Подключить клиента (Claude Code): `claude mcp add cp-hosted --transport http https://<app>/mcp --header "Authorization: Bearer <token>"`.
 
@@ -115,15 +117,15 @@ Smoke (через MCP-клиент или `node:http`-скрипт):
 ## 8. Эксплуатация
 
 - **Бэкап hash chain (RPO):** периодически `export_chain` (он сериализует `content`, которого нет on-chain — потеря volume без бэкапа = безвозвратная потеря контента состояний). Сохранять дамп вне Railway.
-- **Ротация `MCP_AUTH_TOKEN`:** новый токен в Variables → redeploy → обновить клиентов. Старый токен мгновенно инвалидируется.
-- **Мониторинг:** healthcheck Railway (`/healthz`); следить за логами `register_work`/`pay_royalty`/`claim_revenue` (деньги).
+- **Ротация `MCP_API_KEY`:** новый токен в Variables → redeploy → обновить клиентов. Старый токен мгновенно инвалидируется.
+- **Мониторинг:** healthcheck Railway (`/health`); следить за логами `register_work`/`pay_royalty`/`claim_revenue` (деньги).
 - **Инвариант:** сервис **single-instance**. Не включать реплики до выноса state + session-store наружу.
 
 ---
 
-## Приложение A — Code prerequisite патчи
+## Приложение A — Code prerequisites (✅ реализовано в `main`, справка)
 
-Все правки — в `src/index.ts`, затем `yarn build`. Перед правкой: `gitnexus_impact({target:"main", direction:"upstream", repo:"consciousness-protocol-mcp"})`.
+Историческая справка по тому, как устроены P1–P5 в коде. Все правки — в `src/index.ts` (рантайм из `dist/`, поэтому после любой правки `yarn build`). Фактическая реализация местами отличается от первоначальных набросков ниже — расхождения отмечены **РЕАЛИЗАЦИЯ:**.
 
 ### P1 — multi-session crash fix (БЛОКЕР)
 
@@ -186,10 +188,10 @@ const httpServer = createServer(async (req, res) => {
 
 ### P2 — bearer auth (БЛОКЕР)
 
-Внутри listener, **после** ветки `/healthz` (P3), **до** разбора `/mcp`:
+Внутри listener, **после** ветки `/health` (P3), **до** разбора `/mcp`:
 
 ```ts
-const AUTH = process.env.MCP_AUTH_TOKEN;
+const AUTH = process.env.MCP_API_KEY;
 if (AUTH) {
   if (req.headers['authorization'] !== `Bearer ${AUTH}`) {
     res.writeHead(401, { 'Content-Type': 'application/json', 'WWW-Authenticate': 'Bearer' });
@@ -198,14 +200,16 @@ if (AUTH) {
   }
 }
 ```
-`MCP_AUTH_TOKEN` не задан → gate выключен (локальный dev/stdio не ломается). На Railway задать обязательно.
+`MCP_API_KEY` не задан → gate выключен (локальный dev/stdio не ломается). На Railway задать обязательно.
 
-### P3 — /healthz (БЛОКЕР)
+**РЕАЛИЗАЦИЯ:** env `MCP_API_KEY`. Ключ принимается в двух формах — `Authorization: Bearer <key>` **и** `X-API-Key: <key>` (`extractKey`). Сравнение **constant-time** (`crypto.timingSafeEqual` с предварительной сверкой длины), не наивное `!==`. Проверка идёт **после** rate-limit и **после** health-проб, **до** разбора `/mcp`.
+
+### P3 — /health (БЛОКЕР)
 
 Внутри listener, **первой веткой** (до auth — Railway probe ходит без токена), после вычисления `url`:
 
 ```ts
-if (url.pathname === '/healthz') {
+if (url.pathname === '/health') {
   res.writeHead(200, { 'Content-Type': 'application/json' });
   res.end(JSON.stringify({ status: 'ok' }));
   return;
@@ -213,15 +217,19 @@ if (url.pathname === '/healthz') {
 ```
 Liveness, не readiness — намеренно **не** дёргает Story/NEAR RPC, чтобы флап RPC не ронял контейнер в рестарт-петлю.
 
-### P4 — отключить install_skill в http (рекомендуется)
+**РЕАЛИЗАЦИЯ:** две пробы в одной ветке. `/health` — liveness, всегда `200 {"status":"ok"}`. `/ready` — readiness, `200 {"status":"ready"}` нормально и `503 {"status":"shutting_down"}` во время graceful-дрейна (P5). Обе только `GET`/`HEAD` (иначе `405` с `Allow: GET, HEAD`), без auth/rate-limit/session. Railway `healthcheckPath=/health`.
 
-`install_skill` пишет в `~/.claude/skills` и исполняет скачанный код — на hosted-машине с ключами это бессмысленно и опасно. В `buildServer()` обернуть его регистрацию:
+### P4 — отключить install_skill в http
+
+`install_skill` пишет в `~/.claude/skills` и может авто-минтить лицензию с host-кошелька — на hosted-машине это бессмысленно (ставит на сервер, не клиенту) и опасно. В `buildServer()` обернуть его регистрацию:
 
 ```ts
 if (process.env.MCP_TRANSPORT !== 'http') {
   server.tool('install_skill', /* ... */);
 }
 ```
+
+**РЕАЛИЗАЦИЯ:** через параметр `buildServer({ allowInstallSkill })`, не через чтение env внутри. HTTP-путь зовёт `buildServer({ allowInstallSkill: false })`, stdio — `{ allowInstallSkill: true }`. Так гейт работает и для флага `--http` (не только `MCP_TRANSPORT=http`), и call-site явно декларирует решение. Регресс-тест: `tests/http-transport.test.ts` → «install_skill is gated off».
 
 ### P5 — SIGTERM graceful shutdown (рекомендуется)
 
