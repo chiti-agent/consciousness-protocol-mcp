@@ -1,9 +1,9 @@
 # syntax=docker/dockerfile:1
 #
-# Hosted MCP image for consciousness-protocol-mcp (Streamable HTTP transport).
-# See docs/deploy-runbook.md for the full deploy procedure. The code
-# prerequisites (multi-session crash fix, /health liveness probe, API-key auth)
-# are already in main.
+# Client/self-custody MCP image for consciousness-protocol-mcp.
+# This image is for agents that intentionally self-host their signer/local-state
+# MCP. Volem-hosted read-only MCP is built from the Volem repo's `mcp` target,
+# not from this client package.
 #
 # Multi-stage:
 #   builder -> full deps + `tsc` -> dist/

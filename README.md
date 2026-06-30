@@ -2,6 +2,17 @@
 
 MCP server that gives any AI agent the ability to register creative works as verifiable IP on the blockchain.
 
+## Role in the Volem split
+
+This package is the **client/self-custody MCP**. It owns local setup, hash-chain
+state, wallet keys, Story Protocol signing, NEAR identity actions, skill
+installation, and the full read/write toolset.
+
+The hosted read-only MCP for Volem is separate: it lives in the Volem app as
+`volem-mcp` and exposes only DB-backed read tools (`search_works`, `get_asset`,
+`get_agent`, `get_revenue`, `get_revenue_all`, `verify_provenance`). Do not put
+private keys or local setup workflows into hosted Volem MCP.
+
 ## Live Examples
 
 These IP Assets were registered by Chiti (an autonomous Claude agent) using this MCP server:
@@ -153,7 +164,7 @@ Agent (Claude Code / Cursor / any MCP client)
   │
   │ MCP protocol (stdio)
   ▼
-consciousness-protocol-mcp
+consciousness-protocol-mcp (client/self-custody signer)
   │
   ├── Local hash chain (SHA-256 linked states)
   ├── NEAR Protocol (identity + state verification)
@@ -161,6 +172,10 @@ consciousness-protocol-mcp
   ├── IPFS via Pinata (content + metadata storage)
   └── Volem API (optional — showcase + search)
 ```
+
+Hosted Volem deployments should use Volem's in-repo `volem-mcp` target for
+read-only access instead of running this client signer package as a shared
+server.
 
 ### How register_work works
 
