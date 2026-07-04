@@ -82,18 +82,14 @@ const ROYALTY_MODULE_ABI = [
   },
 ] as const;
 
+// Deployed IpRoyaltyVault (SDK v1.4.4) uses an accumulator/debt model — there is
+// NO snapshot mechanism. Claimable is read via the 2-arg claimableRevenue(claimer,
+// token). The old snapshot ABI (getCurrentSnapshotId + 3-arg claimableRevenue)
+// reverts on the current vault, which silently pinned reported claimable to 0.
 const VAULT_ABI = [
   {
-    inputs: [],
-    name: 'getCurrentSnapshotId',
-    outputs: [{ type: 'uint256' }],
-    stateMutability: 'view',
-    type: 'function',
-  },
-  {
     inputs: [
-      { name: 'account', type: 'address' },
-      { name: 'snapshotId', type: 'uint256' },
+      { name: 'claimer', type: 'address' },
       { name: 'token', type: 'address' },
     ],
     name: 'claimableRevenue',
@@ -315,6 +311,48 @@ async function getRevShareForIp(
   }
 }
 
+/**
+ * Read the royalty policy actually attached to an IP from its on-chain license
+ * terms. Returns the policy address, or null if unreadable. claim() uses this so
+ * each child is paired with its real policy instead of an assumed LAP — a
+ * mismatched policy makes the whole atomic claimAllRevenue tx revert.
+ */
+async function getRoyaltyPolicyForIp(
+  publicClient: any,
+  ipId: `0x${string}`,
+): Promise<`0x${string}` | null> {
+  try {
+    const termsCount = await publicClient.readContract({
+      address: LICENSE_REGISTRY as `0x${string}`,
+      abi: LICENSE_REGISTRY_ABI,
+      functionName: 'getAttachedLicenseTermsCount',
+      args: [ipId],
+    }) as bigint;
+
+    if (termsCount === 0n) return null;
+
+    const [, licenseTermsId] = await publicClient.readContract({
+      address: LICENSE_REGISTRY as `0x${string}`,
+      abi: LICENSE_REGISTRY_ABI,
+      functionName: 'getAttachedLicenseTerms',
+      args: [ipId, 0n],
+    }) as [string, bigint];
+
+    const terms = await publicClient.readContract({
+      address: PIL as `0x${string}`,
+      abi: PIL_ABI,
+      functionName: 'getLicenseTerms',
+      args: [licenseTermsId],
+    }) as any;
+
+    const policy = terms.royaltyPolicy as `0x${string}`;
+    if (!policy || policy === '0x0000000000000000000000000000000000000000') return null;
+    return policy;
+  } catch {
+    return null;
+  }
+}
+
 export const royaltyTool = {
   /**
    * Check revenue status for an IP asset — clear financial summary with
@@ -366,32 +404,27 @@ export const royaltyTool = {
         args: [vaultAddress],
       }) as Promise<bigint>;
 
-      // Snapshot-based claimable
+      // Vault-claimable via the deployed accumulator model (2-arg
+      // claimableRevenue(claimer, token)). This is what the ancestor can claim
+      // from its own vault right now — including minting fees that arrived there.
       let claimable = BigInt(0);
-      const snapshotClaimablePromise = (async () => {
+      const claimablePromise = (async () => {
         try {
-          const snapshotId = await publicClient.readContract({
+          claimable = await publicClient.readContract({
             address: vaultAddress,
             abi: VAULT_ABI,
-            functionName: 'getCurrentSnapshotId',
+            functionName: 'claimableRevenue',
+            args: [ipId, WIP_TOKEN as Address],
           }) as bigint;
-          if (snapshotId > BigInt(0)) {
-            claimable = await publicClient.readContract({
-              address: vaultAddress,
-              abi: VAULT_ABI,
-              functionName: 'claimableRevenue',
-              args: [ipId, snapshotId, WIP_TOKEN as Address],
-            }) as bigint;
-          }
         } catch {
-          // No snapshot yet — claimable stays 0
+          // Vault does not expose claimableRevenue(claimer, token) — claimable stays 0
         }
       })();
 
       const [totalReceived, vaultBalance] = await Promise.all([
         totalReceivedPromise,
         vaultBalancePromise,
-        snapshotClaimablePromise,
+        claimablePromise,
       ]);
 
       // --- Revenue share from children ---
@@ -568,66 +601,122 @@ export const royaltyTool = {
       const claimed: Array<{ ipId: string; amount: string; txHash: string }> = [];
       const errors: Array<{ ipId: string; error: string }> = [];
       let totalClaimedWei = BigInt(0);
+      const claimTimeoutMessage = 'Story Protocol call timed out after 60s';
+      const isNothingToClaim = (msg: string) => /NoClaimableTokens|nothing to claim|no claimable revenue/i.test(msg);
+      const isTimeout = (msg: string) => msg.includes(claimTimeoutMessage);
+
+      // Run one claimAllRevenue call and record any claimed WIP. Returns the wei
+      // claimed for this ipId in this call.
+      const runClaimAndRecord = async (ipId: Address, children: Address[], policies: Address[]): Promise<bigint> => {
+        const result = await Promise.race([
+          client.royalty.claimAllRevenue({
+            ancestorIpId: ipId,
+            claimer: ipId,
+            currencyTokens: [WIP_TOKEN_ADDRESS],
+            childIpIds: children,
+            royaltyPolicies: policies,
+          }),
+          new Promise<never>((_, reject) => setTimeout(() => reject(new Error(claimTimeoutMessage)), 60_000)),
+        ]);
+        let sum = BigInt(0);
+        if (result.claimedTokens && result.claimedTokens.length > 0) {
+          const txHash = result.txHashes?.[0] ?? '';
+          for (const ct of result.claimedTokens) {
+            const rawAmount = (ct as any).amount ?? BigInt(0);
+            const amountBigInt = typeof rawAmount === 'bigint' ? rawAmount : BigInt(String(rawAmount));
+            if (amountBigInt > BigInt(0)) {
+              sum += amountBigInt;
+              claimed.push({ ipId, amount: formatEther(amountBigInt), txHash });
+            }
+          }
+        }
+        return sum;
+      };
 
       for (const ipId of ipIds) {
         try {
+          const ip = ipId as Address;
+
+          // Pre-check the ancestor's own accumulator vault. A drained vault is a
+          // benign no-op, not an error for repeated claim_revenue calls.
+          const vaultAddress = await publicClient.readContract({
+            address: ROYALTY_MODULE as Address,
+            abi: ROYALTY_MODULE_ABI,
+            functionName: 'ipRoyaltyVaults',
+            args: [ip],
+          }) as Address;
+
+          if (vaultAddress === '0x0000000000000000000000000000000000000000') continue;
+
+          const selfClaimable = await publicClient.readContract({
+            address: vaultAddress,
+            abi: VAULT_ABI,
+            functionName: 'claimableRevenue',
+            args: [ip, WIP_TOKEN as Address],
+          }) as bigint;
+
           // Collect ALL descendants (direct + grandchildren + deeper). LAP uses the
           // IP graph precompile internally to compute the correct ancestor share
           // for any depth. Filter out zero-revenue descendants because
           // claimAllRevenue reverts with "Array index out of bounds" (0xa05b90b8)
           // on them.
           const descendantIds = await fetchDerivatives(ipId, true, volemApiUrl);
-          const revenues = await Promise.all(
-            descendantIds.map((id) =>
-              (publicClient.readContract({
+          const perChild = await Promise.all(
+            descendantIds.map(async (id) => {
+              const child = id as Address;
+              const revenue = await (publicClient.readContract({
                 address: ROYALTY_MODULE as Address,
                 abi: ROYALTY_MODULE_ABI,
                 functionName: 'totalRevenueTokensReceived',
-                args: [id as Address, WIP_TOKEN as Address],
-              }) as Promise<bigint>).catch(() => BigInt(0)),
-            ),
+                args: [child, WIP_TOKEN as Address],
+              }) as Promise<bigint>).catch(() => BigInt(0));
+
+              if (revenue <= BigInt(0)) return null;
+
+              // Pair each child with its actual on-chain royalty policy, not a
+              // hardcoded LAP: a mismatched policy makes claimAllRevenue revert
+              // atomically, dropping the ancestor's own claim too.
+              const policy = (await getRoyaltyPolicyForIp(publicClient, child)) ?? (ROYALTY_POLICY_LAP as Address);
+              return { child, policy };
+            }),
           );
-          const childIpIds: Address[] = [];
-          const royaltyPolicies: Address[] = [];
-          for (let i = 0; i < descendantIds.length; i++) {
-            if (revenues[i] > BigInt(0)) {
-              childIpIds.push(descendantIds[i] as Address);
-              royaltyPolicies.push(ROYALTY_POLICY_LAP as Address);
+          const claimableChildren = perChild.filter((entry): entry is { child: Address; policy: Address } => entry !== null);
+          const childIpIds = claimableChildren.map((entry) => entry.child);
+          const royaltyPolicies = claimableChildren.map((entry) => entry.policy);
+
+          if (selfClaimable === BigInt(0) && childIpIds.length === 0) continue;
+
+          // Attempt 1: full claim (child transfers + ancestor's own vault) in one tx.
+          let claimedHere = BigInt(0);
+          let attempt1TimedOut = false;
+          try {
+            claimedHere = await runClaimAndRecord(ip, childIpIds, royaltyPolicies);
+          } catch (err: any) {
+            const msg = err.message || String(err);
+            attempt1TimedOut = isTimeout(msg);
+            if (!isNothingToClaim(msg)) {
+              errors.push({ ipId, error: `claimAllRevenue(with ${childIpIds.length} children): ${msg}` });
             }
           }
 
-          const result = await Promise.race([
-            client.royalty.claimAllRevenue({
-              ancestorIpId: ipId as Address,
-              claimer: ipId as Address,
-              currencyTokens: [WIP_TOKEN_ADDRESS],
-              childIpIds,
-              royaltyPolicies,
-            }),
-            new Promise<never>((_, reject) => setTimeout(() => reject(new Error('Story Protocol call timed out after 60s')), 60_000)),
-          ]);
-
-          if (result.claimedTokens && result.claimedTokens.length > 0) {
-            const txHash = result.txHashes?.[0] ?? '';
-            for (const ct of result.claimedTokens) {
-              const rawAmount = (ct as any).amount ?? BigInt(0);
-              const amountBigInt = typeof rawAmount === 'bigint' ? rawAmount : BigInt(String(rawAmount));
-              if (amountBigInt > BigInt(0)) {
-                totalClaimedWei += amountBigInt;
-                claimed.push({
-                  ipId,
-                  amount: formatEther(amountBigInt),
-                  txHash,
-                });
+          // Attempt 2 (fallback): if the full claim recovered nothing but this IP
+          // has children, the child-transfer step likely reverted the atomic tx
+          // and took the ancestor's own claimable (e.g. minting fees) down with it.
+          // Retry a self-vault-only claim (no children) so those funds still land.
+          if (claimedHere === BigInt(0) && !attempt1TimedOut && childIpIds.length > 0 && selfClaimable > BigInt(0)) {
+            try {
+              claimedHere += await runClaimAndRecord(ip, [], []);
+            } catch (err: any) {
+              const msg = err.message || String(err);
+              if (!isNothingToClaim(msg)) {
+                errors.push({ ipId, error: `claimAllRevenue(self-only): ${msg}` });
               }
             }
           }
+
+          totalClaimedWei += claimedHere;
         } catch (err: any) {
-          const msg = err.message || String(err);
-          // Skip expected "no vault" / "no revenue" errors, but log unexpected ones
-          if (!msg.includes('vault') && !msg.includes('revenue') && !msg.includes('IpRoyaltyVault__NoClaimableTokens')) {
-            errors.push({ ipId, error: msg });
-          }
+          errors.push({ ipId, error: err.message || String(err) });
         }
       }
 
