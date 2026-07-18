@@ -44,6 +44,54 @@ async function getStoryClient(config: Config) {
   });
 }
 
+/**
+ * Resolve the SPG NFT collection for the signing identity.
+ *
+ * The disk config is re-read to avoid a stale in-memory spgNftContract, but it
+ * only applies when it belongs to the same wallet: collections are created with
+ * isPublicMinting=false, so an in-memory config for a different signer (tests,
+ * multi-agent setups) inheriting the disk collection would revert on mint.
+ * A newly created collection is persisted to disk for the disk-backed identity,
+ * or cached on the caller's own config object for ephemeral identities — never
+ * by mutating a shared config object read elsewhere.
+ */
+async function resolveSpgContract(
+  config: Config,
+  client: Awaited<ReturnType<typeof getStoryClient>>,
+): Promise<string> {
+  const { loadConfig: reloadConfig, saveConfig } = await import('../config/store.js');
+  let diskConfig: Config | null = null;
+  try {
+    diskConfig = reloadConfig();
+  } catch {
+    // no disk config — e.g. ephemeral test setups on a clean machine
+  }
+  const sameIdentity = diskConfig !== null
+    && diskConfig.story.evmAddress?.toLowerCase() === config.story.evmAddress?.toLowerCase();
+
+  let spgContract = (sameIdentity ? diskConfig!.story.spgNftContract : undefined)
+    ?? config.story.spgNftContract;
+  if (spgContract) return spgContract;
+
+  const collection = await client.nftClient.createNFTCollection({
+    name: `${config.near.accountId} Works`,
+    symbol: 'CPIP',
+    isPublicMinting: false,
+    mintOpen: true,
+    mintFeeRecipient: _zeroAddress,
+    contractURI: '',
+  });
+  spgContract = collection.spgNftContract!;
+
+  if (sameIdentity) {
+    diskConfig!.story.spgNftContract = spgContract;
+    saveConfig(diskConfig!);
+  } else {
+    config.story.spgNftContract = spgContract;
+  }
+  return spgContract;
+}
+
 /** Get all available Pinata JWT keys (single key + rotation pool) */
 function getPinataKeys(config: Config): string[] {
   const keys: string[] = [];
@@ -345,25 +393,7 @@ export const registerWorkTool = {
       const nftMetadataHash = ('0x' + createHash('sha256')
         .update(JSON.stringify(nftMetadata)).digest('hex')) as `0x${string}`;
 
-      // Re-read config from disk to avoid stale in-memory spgNftContract
-      const { loadConfig: reloadConfig } = await import('../config/store.js');
-      const freshConfig = reloadConfig();
-      let spgContract = freshConfig.story.spgNftContract;
-      if (!spgContract) {
-        const collection = await client.nftClient.createNFTCollection({
-          name: `${config.near.accountId} Works`,
-          symbol: 'CPIP',
-          isPublicMinting: false,
-          mintOpen: true,
-          mintFeeRecipient: _zeroAddress,
-          contractURI: '',
-        });
-        spgContract = collection.spgNftContract!;
-        // Save to disk via freshConfig — do NOT mutate the shared in-memory config object
-        freshConfig.story.spgNftContract = spgContract;
-        const { saveConfig } = await import('../config/store.js');
-        saveConfig(freshConfig);
-      }
+      const spgContract = await resolveSpgContract(config, client);
 
       // Register IP
       const mintingFee = params.minting_fee && params.minting_fee !== '0'
@@ -547,25 +577,7 @@ export const registerWorkTool = {
       const nftMetadataHash = ('0x' + createHash('sha256')
         .update(JSON.stringify(nftMetadata)).digest('hex')) as `0x${string}`;
 
-      // Re-read config from disk to avoid stale in-memory spgNftContract
-      const { loadConfig: reloadConfig } = await import('../config/store.js');
-      const freshConfig = reloadConfig();
-      let spgContract = freshConfig.story.spgNftContract;
-      if (!spgContract) {
-        const collection = await client.nftClient.createNFTCollection({
-          name: `${config.near.accountId} Works`,
-          symbol: 'CPIP',
-          isPublicMinting: false,
-          mintOpen: true,
-          mintFeeRecipient: _zeroAddress,
-          contractURI: '',
-        });
-        spgContract = collection.spgNftContract!;
-        // Save to disk via freshConfig — do NOT mutate the shared in-memory config object
-        freshConfig.story.spgNftContract = spgContract;
-        const { saveConfig } = await import('../config/store.js');
-        saveConfig(freshConfig);
-      }
+      const spgContract = await resolveSpgContract(config, client);
 
       // Build registration params — two mutually exclusive paths:
       // 1. derivData path: use parent's license terms IDs (standard derivative)
