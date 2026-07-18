@@ -60,9 +60,14 @@ export function saveConfig(config: Config): void {
 }
 
 export function loadKey(name: string): string {
-  const keyFile = join(KEYS_DIR, `${name}.json`);
+  // Test override: CP_TEST_WALLET=<agent> redirects the 'evm' key to a
+  // test-wallet key file. Tests used to overwrite evm.json on disk instead; a
+  // crashed run then left a test key as the production identity for months.
+  const testWallet = process.env.CP_TEST_WALLET;
+  const effectiveName = name === 'evm' && testWallet ? `test-${testWallet.replace(/^test-/, '')}` : name;
+  const keyFile = join(KEYS_DIR, `${effectiveName}.json`);
   if (!existsSync(keyFile)) {
-    throw new Error(`Key not found: ${name}. Run setup first.`);
+    throw new Error(`Key not found: ${effectiveName}. Run setup first.`);
   }
   const data = JSON.parse(readFileSync(keyFile, 'utf-8'));
   return data.privateKey;

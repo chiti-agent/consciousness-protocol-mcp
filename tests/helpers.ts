@@ -4,7 +4,7 @@
  */
 
 import { join } from 'node:path';
-import { readFileSync, writeFileSync, mkdirSync, existsSync, copyFileSync, unlinkSync } from 'node:fs';
+import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'node:fs';
 import { homedir } from 'node:os';
 import type { Config } from '../src/config/store.js';
 import { generateWallets, type TestAgentName, type TestWallet } from './wallets/generate-wallets.js';
@@ -114,38 +114,34 @@ export function readFixtureBuffer(name: string): Buffer {
   return readFileSync(fixturePath(name));
 }
 
-const EVM_KEY_PATH = join(KEYS_DIR, 'evm.json');
-const EVM_BACKUP_PATH = join(KEYS_DIR, 'evm.original.json');
-
 /**
- * Activate a test wallet by writing its private key to the keys dir.
- * This makes `loadKey('evm')` inside tools return the correct key.
- * Call this before invoking any tool that uses `loadKey('evm')`.
- * Backs up the original key on first call.
+ * Activate a test wallet for tools that use `loadKey('evm')`.
+ *
+ * Sets CP_TEST_WALLET so loadKey redirects to keys/test-<agent>.json for this
+ * process only. The production evm.json is NEVER touched: the old
+ * overwrite-and-restore approach left a test key as the live identity for
+ * months after a crashed run. Ensures the test key file exists on disk.
  */
 export function activateTestWallet(agentName: TestAgentName): void {
   const wallet = getTestWallet(agentName);
-  mkdirSync(KEYS_DIR, { recursive: true });
-  // Backup original key on first activation
-  if (existsSync(EVM_KEY_PATH) && !existsSync(EVM_BACKUP_PATH)) {
-    copyFileSync(EVM_KEY_PATH, EVM_BACKUP_PATH);
+  const keyFile = join(KEYS_DIR, `${agentName}.json`);
+  if (!existsSync(keyFile)) {
+    mkdirSync(KEYS_DIR, { recursive: true });
+    writeFileSync(
+      keyFile,
+      JSON.stringify({ privateKey: wallet.privateKey, address: wallet.address }),
+      { mode: 0o600 },
+    );
   }
-  writeFileSync(
-    EVM_KEY_PATH,
-    JSON.stringify({ privateKey: wallet.privateKey, address: wallet.address }),
-    { mode: 0o600 },
-  );
+  process.env.CP_TEST_WALLET = agentName;
 }
 
 /**
- * Restore the original EVM key after tests.
+ * Deactivate the test wallet override (loadKey('evm') returns to evm.json).
  * Call this in after() hooks.
  */
 export function restoreOriginalWallet(): void {
-  if (existsSync(EVM_BACKUP_PATH)) {
-    copyFileSync(EVM_BACKUP_PATH, EVM_KEY_PATH);
-    unlinkSync(EVM_BACKUP_PATH);
-  }
+  delete process.env.CP_TEST_WALLET;
 }
 
 /**
