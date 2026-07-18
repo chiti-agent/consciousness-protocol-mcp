@@ -8,7 +8,7 @@
 import type { Config } from './config/store.js';
 import { loadKey } from './config/store.js';
 
-export type VolemEventType = 'LICENSE_MINTED' | 'ROYALTY_CLAIMED' | 'ROYALTY_PAID';
+export type VolemEventType = 'LICENSE_ADDED' | 'LICENSE_MINTED' | 'ROYALTY_CLAIMED' | 'ROYALTY_PAID';
 
 export interface VolemEvent {
   ip_id: string;

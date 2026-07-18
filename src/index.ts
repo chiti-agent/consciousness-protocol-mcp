@@ -210,6 +210,43 @@ server.tool(
 );
 
 server.tool(
+  'attach_license_terms',
+  'Attach an ADDITIONAL license terms set to your ROOT IP asset (e.g. add a commercial-use license next to an existing remix license). Derivatives cannot attach new terms — Story Protocol locks them to the parent terms; use set_licensing_config to change a derivative\'s pricing. ASK PERMISSION: costs gas.',
+  {
+    ip_id: z.string().regex(/^0x[a-fA-F0-9]{40}$/, 'Must be a valid Ethereum address').describe('Your root IP Asset ID (0x...)'),
+    license: z.enum(['commercial-remix', 'commercial-exclusive']).describe('License type: commercial-remix allows derivatives with revenue share, commercial-exclusive allows usage without derivatives'),
+    minting_fee: z.string().default('0').describe('Price to mint a license in IP tokens (e.g. "0.01"). Default: free.'),
+    revenue_share: z.number().min(0).max(100).default(5).describe('Revenue share % for derivatives (commercial-remix only, default: 5)'),
+    royalty_policy: z.enum(['LAP', 'LRP']).default('LAP').describe('Royalty policy for derivatives. LAP (absolute): every ancestor takes its full revenue_share % of every descendant\'s revenue at any depth — protects the root, taxes deep chains (a node at depth N keeps 100−share×N %). LRP (relative): each node pays only its direct parent — friendly to deep chains, the root\'s take decays with depth. Immutable once attached.'),
+    reciprocal: z.boolean().default(true).describe('If true, all derivatives are forced onto these exact terms (whole subtree shares one license). If false, each derivative attaches its own terms.'),
+  },
+  async (params) => {
+    if (!config) return { content: [{ type: 'text' as const, text: 'Not configured. Run setup first.' }] };
+    const { licenseConfigTool } = await import('./tools/license-config.js');
+    const result = await licenseConfigTool.attachLicenseTerms(config, params);
+    return { content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }] };
+  },
+);
+
+server.tool(
+  'set_licensing_config',
+  'Change the EFFECTIVE pricing of your IP for one of its license terms: minting fee, revenue share, or disable licensing entirely. This is the only way to reprice an existing node — attached terms are immutable, but this per-IP config overrides them (works on derivatives too). Note: revenue share can only be raised above the terms value, never lowered. ASK PERMISSION: costs gas.',
+  {
+    ip_id: z.string().regex(/^0x[a-fA-F0-9]{40}$/, 'Must be a valid Ethereum address').describe('Your IP Asset ID (0x...)'),
+    license_terms_id: z.string().describe('License terms ID this config applies to'),
+    minting_fee: z.string().optional().describe('New license price in IP tokens (e.g. "0.3"). Cannot be lower than the fee in the license terms — the contract rejects it. Omit to keep current.'),
+    revenue_share: z.number().min(0).max(100).optional().describe('New revenue share % — upward only (contract rejects values below the terms). Omit to keep current.'),
+    disabled: z.boolean().optional().describe('true = stop all license minting and new derivatives for this IP. Omit to keep current.'),
+  },
+  async (params) => {
+    if (!config) return { content: [{ type: 'text' as const, text: 'Not configured. Run setup first.' }] };
+    const { licenseConfigTool } = await import('./tools/license-config.js');
+    const result = await licenseConfigTool.setLicensingConfig(config, params);
+    return { content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }] };
+  },
+);
+
+server.tool(
   'get_revenue_all',
   'Get revenue summary across ALL your registered IP assets — total earned, total claimable, per-asset breakdown with minting fees and revenue share from derivatives at any depth. Read-only, no gas cost.',
   {},
