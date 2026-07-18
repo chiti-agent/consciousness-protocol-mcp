@@ -54,6 +54,36 @@ function textMimeFor(type: string): string {
   return TEXT_MIME_BY_TYPE[type] ?? 'text/plain';
 }
 
+/**
+ * Royalty policy contracts (same addresses on Aeneid 1315 and mainnet 1514).
+ * LAP (Liquid Absolute Percentage): every ancestor takes its full percent of
+ * every descendant's revenue at any depth — protects the root, taxes deep
+ * nodes (at depth N a node keeps 100−share×N %).
+ * LRP (Liquid Relative Percentage): each node pays only its direct parent;
+ * the root's effective take decays multiplicatively with depth.
+ */
+const ROYALTY_POLICY_LAP = '0xBe54FB168b3c982b7AaE60dB6CF75Bd8447b390E' as const;
+const ROYALTY_POLICY_LRP = '0x9156e603C949481883B1d3355c6f1132D191fC41' as const;
+
+export type RoyaltyPolicyChoice = 'LAP' | 'LRP';
+
+/**
+ * Patch a PILFlavor-built terms object with the chosen royalty policy and
+ * reciprocity. PILFlavor hardcodes LAP + reciprocal; the license terms are
+ * immutable once attached, so this is the only moment the choice exists.
+ */
+export function applyPolicyChoice<T extends { royaltyPolicy: string; derivativesReciprocal: boolean }>(
+  terms: T,
+  policy?: RoyaltyPolicyChoice,
+  reciprocal?: boolean,
+): T {
+  return {
+    ...terms,
+    royaltyPolicy: policy === 'LRP' ? ROYALTY_POLICY_LRP : policy === 'LAP' ? ROYALTY_POLICY_LAP : terms.royaltyPolicy,
+    derivativesReciprocal: reciprocal ?? terms.derivativesReciprocal,
+  };
+}
+
 async function getStoryClient(config: Config) {
   await ensureImports();
 
@@ -266,6 +296,8 @@ export const registerWorkTool = {
     license: string;
     revenue_share?: number;
     minting_fee?: string;
+    royalty_policy?: RoyaltyPolicyChoice;
+    reciprocal?: boolean;
     chain_sequence?: number;
     chain_hash?: string;
   }) {
@@ -425,13 +457,17 @@ export const registerWorkTool = {
 
       const licenseTerms = params.license === 'free'
         ? _PILFlavor.nonCommercialSocialRemixing()
-        : params.license === 'commercial-exclusive'
-          ? _PILFlavor.commercialUse({ defaultMintingFee: mintingFee, currency: _WIP_TOKEN_ADDRESS })
-          : _PILFlavor.commercialRemix({
-              commercialRevShare: params.revenue_share ?? 5,
-              defaultMintingFee: mintingFee,
-              currency: _WIP_TOKEN_ADDRESS,
-            });
+        : applyPolicyChoice(
+            params.license === 'commercial-exclusive'
+              ? _PILFlavor.commercialUse({ defaultMintingFee: mintingFee, currency: _WIP_TOKEN_ADDRESS })
+              : _PILFlavor.commercialRemix({
+                  commercialRevShare: params.revenue_share ?? 5,
+                  defaultMintingFee: mintingFee,
+                  currency: _WIP_TOKEN_ADDRESS,
+                }),
+            params.royalty_policy,
+            params.reciprocal,
+          );
 
       const response = await client.ipAsset.registerIpAsset({
         nft: { type: 'mint', spgNftContract: spgContract as Address },

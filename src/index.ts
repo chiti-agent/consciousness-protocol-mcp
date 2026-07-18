@@ -162,6 +162,8 @@ server.tool(
     license: z.enum(['free', 'commercial-remix', 'commercial-exclusive']).default('commercial-remix').describe('License type'),
     revenue_share: z.number().min(0).max(100).default(5).describe('Revenue share % for derivatives (default: 5)'),
     minting_fee: z.string().default('0').describe('Price to mint a license in IP tokens (e.g. "0.01"). Default: free.'),
+    royalty_policy: z.enum(['LAP', 'LRP']).default('LAP').describe('Royalty policy for derivatives. LAP (absolute): every ancestor takes its full revenue_share % of every descendant\'s revenue at any depth — protects the root, taxes deep chains (a node at depth N keeps 100−share×N %). LRP (relative): each node pays only its direct parent — friendly to deep chains, the root\'s take decays with depth. Immutable once attached.'),
+    reciprocal: z.boolean().default(true).describe('If true, all derivatives are forced onto these exact terms (whole subtree shares one license). If false, each derivative attaches its own terms.'),
     chain_sequence: z.number().int().min(0).optional().describe('Chain state sequence (for provenance)'),
     chain_hash: z.string().optional().describe('Chain state hash (for provenance)'),
   },
