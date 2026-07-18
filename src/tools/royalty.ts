@@ -607,8 +607,13 @@ export const royaltyTool = {
       const isTimeout = (msg: string) => msg.includes(claimTimeoutMessage);
 
       // Run one claimAllRevenue call and record any claimed WIP. Returns the wei
-      // claimed for this ipId in this call.
-      const runClaimAndRecord = async (ipId: Address, children: Address[], policies: Address[]): Promise<bigint> => {
+      // claimed for this ipId in this call. With disablePostSteps the SDK skips
+      // its auto-transfer/auto-unwrap tail (which can revert with 0x7d844d43 and
+      // take the whole claim down); the claimed WIP then lands in the ancestor
+      // IP account and is swept to the wallet with an explicit transferErc20.
+      const runClaimAndRecord = async (
+        ipId: Address, children: Address[], policies: Address[], disablePostSteps = false,
+      ): Promise<bigint> => {
         const result = await Promise.race([
           client.royalty.claimAllRevenue({
             ancestorIpId: ipId,
@@ -616,6 +621,12 @@ export const royaltyTool = {
             currencyTokens: [WIP_TOKEN_ADDRESS],
             childIpIds: children,
             royaltyPolicies: policies,
+            ...(disablePostSteps && {
+              claimOptions: {
+                autoTransferAllClaimedTokensFromIp: false,
+                autoUnwrapIpTokens: false,
+              },
+            }),
           }),
           new Promise<never>((_, reject) => setTimeout(() => reject(new Error(claimTimeoutMessage)), 60_000)),
         ]);
@@ -631,7 +642,43 @@ export const royaltyTool = {
             }
           }
         }
+        if (disablePostSteps && sum > BigInt(0)) {
+          // Sweep the claimed WIP out of the IP account. Failure here is not a
+          // lost claim — the tokens sit safely in the IP account — so record a
+          // warning instead of throwing.
+          try {
+            await client.ipAccount.transferErc20({
+              ipId,
+              tokens: [{ address: WIP_TOKEN as Address, amount: sum, target: account.address }],
+            });
+          } catch (err: any) {
+            errors.push({ ipId, error: `sweep transferErc20 (WIP stays in IP account, retry later): ${err.message || String(err)}` });
+          }
+        }
         return sum;
+      };
+
+      // One claim attempt with an automatic post-step-disabled retry: an SDK
+      // revert in the auto-transfer/unwrap tail must not cost us the claim.
+      const claimWithPostStepFallback = async (
+        ipId: Address, children: Address[], policies: Address[], label: string,
+      ): Promise<{ sum: bigint; timedOut: boolean }> => {
+        try {
+          return { sum: await runClaimAndRecord(ipId, children, policies), timedOut: false };
+        } catch (err: any) {
+          const msg = err.message || String(err);
+          if (isTimeout(msg)) return { sum: BigInt(0), timedOut: true };
+          if (isNothingToClaim(msg)) return { sum: BigInt(0), timedOut: false };
+          try {
+            return { sum: await runClaimAndRecord(ipId, children, policies, true), timedOut: false };
+          } catch (retryErr: any) {
+            const retryMsg = retryErr.message || String(retryErr);
+            if (!isNothingToClaim(retryMsg)) {
+              errors.push({ ipId, error: `${label}: ${msg}; retry without post-steps: ${retryMsg}` });
+            }
+            return { sum: BigInt(0), timedOut: isTimeout(retryMsg) };
+          }
+        }
       };
 
       for (const ipId of ipIds) {
@@ -687,32 +734,20 @@ export const royaltyTool = {
 
           if (selfClaimable === BigInt(0) && childIpIds.length === 0) continue;
 
-          // Attempt 1: full claim (child transfers + ancestor's own vault) in one tx.
-          let claimedHere = BigInt(0);
-          let attempt1TimedOut = false;
-          try {
-            claimedHere = await runClaimAndRecord(ip, childIpIds, royaltyPolicies);
-          } catch (err: any) {
-            const msg = err.message || String(err);
-            attempt1TimedOut = isTimeout(msg);
-            if (!isNothingToClaim(msg)) {
-              errors.push({ ipId, error: `claimAllRevenue(with ${childIpIds.length} children): ${msg}` });
-            }
-          }
+          // Attempt 1: full claim (child transfers + ancestor's own vault) in one
+          // tx; on an SDK post-step revert it retries with post-steps disabled.
+          const attempt1 = await claimWithPostStepFallback(
+            ip, childIpIds, royaltyPolicies, `claimAllRevenue(with ${childIpIds.length} children)`,
+          );
+          let claimedHere = attempt1.sum;
 
           // Attempt 2 (fallback): if the full claim recovered nothing but this IP
           // has children, the child-transfer step likely reverted the atomic tx
           // and took the ancestor's own claimable (e.g. minting fees) down with it.
           // Retry a self-vault-only claim (no children) so those funds still land.
-          if (claimedHere === BigInt(0) && !attempt1TimedOut && childIpIds.length > 0 && selfClaimable > BigInt(0)) {
-            try {
-              claimedHere += await runClaimAndRecord(ip, [], []);
-            } catch (err: any) {
-              const msg = err.message || String(err);
-              if (!isNothingToClaim(msg)) {
-                errors.push({ ipId, error: `claimAllRevenue(self-only): ${msg}` });
-              }
-            }
+          if (claimedHere === BigInt(0) && !attempt1.timedOut && childIpIds.length > 0 && selfClaimable > BigInt(0)) {
+            const attempt2 = await claimWithPostStepFallback(ip, [], [], 'claimAllRevenue(self-only)');
+            claimedHere += attempt2.sum;
           }
 
           totalClaimedWei += claimedHere;
