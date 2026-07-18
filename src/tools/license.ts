@@ -5,6 +5,7 @@
 import type { Config } from '../config/store.js';
 import { loadKey } from '../config/store.js';
 import { cappedHttp } from '../config/fee-cap.js';
+import { postVolemEvent } from '../volem-events.js';
 
 export const licenseTool = {
   async mint(config: Config, params: { ip_id: string; license_terms_id: string; amount: number }) {
@@ -35,6 +36,15 @@ export const licenseTool = {
         }),
         new Promise<never>((_, reject) => setTimeout(() => reject(new Error('Story Protocol call timed out after 60s')), 60_000)),
       ]);
+
+      await postVolemEvent(config, {
+        ip_id: params.ip_id,
+        event_type: 'LICENSE_MINTED',
+        license_terms_id: params.license_terms_id,
+        token_id: result.licenseTokenIds?.[0] !== undefined ? String(result.licenseTokenIds[0]) : undefined,
+        tx_hash: result.txHash,
+        metadata: { amount: params.amount, receiver: account.address },
+      });
 
       return {
         success: true,

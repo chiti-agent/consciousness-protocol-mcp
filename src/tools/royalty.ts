@@ -5,6 +5,7 @@
 import type { Config } from '../config/store.js';
 import { loadKey, REGISTRATIONS_FILE } from '../config/store.js';
 import { cappedHttp } from '../config/fee-cap.js';
+import { postVolemEvent } from '../volem-events.js';
 import { readFileSync, existsSync } from 'node:fs';
 
 /**
@@ -556,6 +557,13 @@ export const royaltyTool = {
         new Promise<never>((_, reject) => setTimeout(() => reject(new Error('Story Protocol call timed out after 60s')), 60_000)),
       ]);
 
+      await postVolemEvent(config, {
+        ip_id: params.receiver_ip_id,
+        event_type: 'ROYALTY_PAID',
+        tx_hash: result.txHash,
+        metadata: { paidAmount: parseEther(params.amount).toString(), payer: account.address },
+      });
+
       return {
         success: true,
         txHash: result.txHash,
@@ -599,7 +607,7 @@ export const royaltyTool = {
       }
 
       const volemApiUrl = resolveVolemApiUrl(config);
-      const claimed: Array<{ ipId: string; amount: string; txHash: string }> = [];
+      const claimed: Array<{ ipId: string; amount: string; amountWei: string; txHash: string }> = [];
       const errors: Array<{ ipId: string; error: string }> = [];
       let totalClaimedWei = BigInt(0);
       const claimTimeoutMessage = 'Story Protocol call timed out after 60s';
@@ -643,7 +651,7 @@ export const royaltyTool = {
             const amountBigInt = typeof rawAmount === 'bigint' ? rawAmount : BigInt(String(rawAmount));
             if (amountBigInt > BigInt(0)) {
               sum += amountBigInt;
-              claimed.push({ ipId, amount: formatEther(amountBigInt), txHash });
+              claimed.push({ ipId, amount: formatEther(amountBigInt), amountWei: amountBigInt.toString(), txHash });
             }
           }
         }
@@ -759,6 +767,16 @@ export const royaltyTool = {
         } catch (err: any) {
           errors.push({ ipId, error: err.message || String(err) });
         }
+      }
+
+      // Dashboard's Total Claimed sums metadata.claimedAmount (wei) per event
+      for (const entry of claimed) {
+        await postVolemEvent(config, {
+          ip_id: entry.ipId,
+          event_type: 'ROYALTY_CLAIMED',
+          tx_hash: entry.txHash,
+          metadata: { claimedAmount: entry.amountWei },
+        });
       }
 
       return {
