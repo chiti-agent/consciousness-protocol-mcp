@@ -5,6 +5,7 @@
 import { createHash } from 'node:crypto';
 import type { Config } from '../config/store.js';
 import { loadKey, REGISTRATIONS_FILE } from '../config/store.js';
+import { cappedHttp } from '../config/fee-cap.js';
 import { readFileSync, writeFileSync, existsSync } from 'node:fs';
 
 // Lazy-loaded modules — cached after first import
@@ -38,7 +39,7 @@ async function getStoryClient(config: Config) {
 
   return _StoryClient.newClient({
     account,
-    transport: _http(config.story.rpcUrl),
+    transport: cappedHttp(_http, config.story.rpcUrl),
     chainId: config.story.chainId,
   });
 }

@@ -4,6 +4,7 @@
 
 import type { Config } from '../config/store.js';
 import { loadKey, REGISTRATIONS_FILE } from '../config/store.js';
+import { cappedHttp } from '../config/fee-cap.js';
 import { readFileSync, existsSync } from 'node:fs';
 
 /**
@@ -540,7 +541,7 @@ export const royaltyTool = {
       const account = privateKeyToAccount(pk as `0x${string}`);
       const client = StoryClient.newClient({
         account,
-        transport: http(config.story.rpcUrl),
+        transport: cappedHttp(http, config.story.rpcUrl),
         chainId: config.story.chainId,
       });
 
@@ -577,7 +578,7 @@ export const royaltyTool = {
       const account = privateKeyToAccount(pk as `0x${string}`);
       const client = StoryClient.newClient({
         account,
-        transport: http(config.story.rpcUrl),
+        transport: cappedHttp(http, config.story.rpcUrl),
         chainId: config.story.chainId,
       });
       const publicClient = createPublicClient({ transport: http(config.story.rpcUrl) });

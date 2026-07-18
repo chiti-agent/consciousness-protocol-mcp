@@ -4,6 +4,7 @@
 
 import type { Config } from '../config/store.js';
 import { loadKey } from '../config/store.js';
+import { cappedHttp } from '../config/fee-cap.js';
 
 export const licenseTool = {
   async mint(config: Config, params: { ip_id: string; license_terms_id: string; amount: number }) {
@@ -21,7 +22,7 @@ export const licenseTool = {
       const account = privateKeyToAccount(pk as `0x${string}`);
       const client = StoryClient.newClient({
         account,
-        transport: http(config.story.rpcUrl),
+        transport: cappedHttp(http, config.story.rpcUrl),
         chainId: config.story.chainId,
       });
 
