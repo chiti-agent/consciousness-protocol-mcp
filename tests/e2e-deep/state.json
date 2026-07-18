@@ -68,5 +68,25 @@
     ],
     "txHash": "0x4f4844360c6347c34024d17f94bbec32ba36d1931de5221281260b08e95a35b9",
     "title": "Genesis Applied — field report using genesis-skill"
+  },
+  "L5": {
+    "key": "L5",
+    "agent": "human-ivan",
+    "ipId": "0x50811aF511D3f8d865c68AE9e183B1bE8fdEB24a",
+    "licenseTermsIds": [
+      "2581"
+    ],
+    "txHash": "",
+    "title": "DER1"
+  },
+  "L6": {
+    "key": "L6",
+    "agent": "test-musician",
+    "ipId": "0xBBe11F9ea47847798D20f460b0a5171768afaeA9",
+    "licenseTermsIds": [
+      "2581"
+    ],
+    "txHash": "0x5cfed4669a9b00729b0b68cf8489dc957c78a9eb9f8e7f16545fde5668226504",
+    "title": "Genesis Echo"
   }
 }

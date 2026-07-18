@@ -618,7 +618,12 @@ export const royaltyTool = {
           client.royalty.claimAllRevenue({
             ancestorIpId: ipId,
             claimer: ipId,
-            currencyTokens: [WIP_TOKEN_ADDRESS],
+            // The contract pairs currencyTokens[i] with childIpIds[i]; a single
+            // token entry with several children reverts with "Array index is
+            // out of bounds", killing every multi-child claim.
+            currencyTokens: children.length > 0
+              ? children.map(() => WIP_TOKEN_ADDRESS)
+              : [WIP_TOKEN_ADDRESS],
             childIpIds: children,
             royaltyPolicies: policies,
             ...(disablePostSteps && {
