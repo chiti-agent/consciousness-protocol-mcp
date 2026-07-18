@@ -31,6 +31,29 @@ async function ensureImports() {
   _parseEther = viem.parseEther;
 }
 
+/**
+ * Map logical content types to real text MIME types. `text/${type}` produced
+ * fake MIMEs (text/text, text/agent-skill) that no content viewer or gallery
+ * filter matches — Volem's "text" chip filters on text/plain|markdown|poem|
+ * post|analysis and "code" on text/code and friends. Semantic meaning
+ * (agent-skill, hypothesis, …) belongs in ip_category, not in the MIME.
+ */
+const TEXT_MIME_BY_TYPE: Record<string, string> = {
+  text: 'text/plain',
+  poem: 'text/poem',
+  post: 'text/post',
+  analysis: 'text/analysis',
+  hypothesis: 'text/analysis',
+  markdown: 'text/markdown',
+  code: 'text/code',
+  skill: 'text/markdown',
+  'agent-skill': 'text/markdown',
+};
+
+function textMimeFor(type: string): string {
+  return TEXT_MIME_BY_TYPE[type] ?? 'text/plain';
+}
+
 async function getStoryClient(config: Config) {
   await ensureImports();
 
@@ -296,7 +319,7 @@ export const registerWorkTool = {
         mediaUrl = await uploadFileToIPFS(config, fileBuffer, params.title + ext);
       } else {
         contentHash = createHash('sha256').update(params.content!).digest('hex');
-        ipType = params.media_type || `text/${params.type}`;
+        ipType = params.media_type || textMimeFor(params.type);
 
         // Block dangerous MIME types even when content is provided as string
         const blockedMimeTypes = ['application/zip', 'application/x-tar', 'application/gzip', 'application/x-rar-compressed', 'application/x-7z-compressed', 'application/octet-stream', 'application/x-executable', 'application/x-msdos-program'];
@@ -470,6 +493,7 @@ export const registerWorkTool = {
     title: string;
     content: string;
     type: string;
+    ip_category?: string;
     parent_ip_id: string;
     parent_license_terms_id?: string;
     license_token_id?: string;
@@ -552,7 +576,7 @@ export const registerWorkTool = {
         title: params.title,
         description: `Derivative work: ${params.title}`,
         createdAt: new Date().toISOString(),
-        ipType: `text/${params.type}`,
+        ipType: textMimeFor(params.type),
         mediaUrl,
         mediaHash: ('0x' + contentHash) as `0x${string}`,
         mediaType: 'text/plain',
@@ -689,7 +713,8 @@ export const registerWorkTool = {
           ipId: response.ipId!,
           title: params.title,
           description: `Derivative work: ${params.title}`,
-          ipType: `text/${params.type}`,
+          ipType: textMimeFor(params.type),
+          ipCategory: params.ip_category,
           mediaUrl,
           metadataUri: ipMetadataURI,
           metadataHash: ipMetadataHash,

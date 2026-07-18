@@ -1,0 +1,72 @@
+{
+  "ROOT": {
+    "key": "ROOT",
+    "agent": "test-poet",
+    "ipId": "0x886C344816C8F8456c51B5715683083cfFD53002",
+    "licenseTermsIds": [
+      "2581"
+    ],
+    "txHash": "0x8be4c1704e826fa4769a7dfa33f3ab19ec25f609153948ca00d79fe64d08fc7c",
+    "title": "Genesis Poem"
+  },
+  "L1a": {
+    "key": "L1a",
+    "agent": "test-artist",
+    "ipId": "0x642e8bECE6101033e0686c9d006710fE69E17b25",
+    "licenseTermsIds": [
+      "2581"
+    ],
+    "txHash": "0xc11b6513dd9a94109405c83b5d4eee48b0cfa3326fed9eb3671c67851fb8ec7b",
+    "title": "Visual Genesis — ink study after the root poem"
+  },
+  "L1b": {
+    "key": "L1b",
+    "agent": "test-inventor",
+    "ipId": "0xC02A9D44C4Bd35f91467dD91F04e48d7Fb017255",
+    "licenseTermsIds": [
+      "2581"
+    ],
+    "txHash": "0x657ba1bc2e1999659755b569b4435a713da6579abe2e3f2d6f49fccc340d7e96",
+    "title": "Genesis Apparatus — hypothesis derived from the root poem"
+  },
+  "L2a": {
+    "key": "L2a",
+    "agent": "test-developer",
+    "ipId": "0xE5Ea8912BaA70A7B8E326d66BE43110A6f49622e",
+    "licenseTermsIds": [
+      "2581"
+    ],
+    "txHash": "0x8721bcbd603fe43e4e13566f5376daeeda84e5eaf4d849219a0ff85c2ff45caf",
+    "title": "genesis-utils — code sketch after Visual Genesis"
+  },
+  "L2b": {
+    "key": "L2b",
+    "agent": "test-mcp-maker",
+    "ipId": "0xF95537FEb7B5849AD1dcFf6Ff3B4eeee2b992f84",
+    "licenseTermsIds": [
+      "2581"
+    ],
+    "txHash": "0xd64654a4593231d11ac02cf75fd66f7a6e3778445e69d21fab3c6e2ac9a54e1c",
+    "title": "Genesis Notes — commentary on Visual Genesis"
+  },
+  "L3": {
+    "key": "L3",
+    "agent": "test-skill-maker",
+    "ipId": "0xfc3464424303252D41cB28bB8a1c35D69e207f43",
+    "licenseTermsIds": [
+      "2581"
+    ],
+    "txHash": "0xb48d278862767e59201b544307733a379628447ab111a6dc28b5d500497656b4",
+    "title": "genesis-skill — measuring skill built on genesis-utils"
+  },
+  "L4": {
+    "key": "L4",
+    "agent": "test-buyer",
+    "ipId": "0x68b315aD2997b4f8EA0D4083DF9DaB2D6237396a",
+    "licenseTermsIds": [
+      "2581"
+    ],
+    "txHash": "0x4f4844360c6347c34024d17f94bbec32ba36d1931de5221281260b08e95a35b9",
+    "title": "Genesis Applied — field report using genesis-skill"
+  }
+}
