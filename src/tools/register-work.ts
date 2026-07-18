@@ -542,11 +542,20 @@ export const registerWorkTool = {
       const account = _privateKeyToAccount(pk as `0x${string}`);
       const contentHash = createHash('sha256').update(params.content).digest('hex');
 
+      // Upload the content itself as media, mirroring register(): without this
+      // the derivative has no mediaUrl and renders as an empty asset in Volem.
+      const mediaUrl = await uploadFileToIPFS(
+        config, Buffer.from(params.content, 'utf-8'), `${params.title}.txt`,
+      );
+
       const ipMetadata = client.ipAsset.generateIpMetadata({
         title: params.title,
-        description: 'Derivative work',
+        description: `Derivative work: ${params.title}`,
         createdAt: new Date().toISOString(),
         ipType: `text/${params.type}`,
+        mediaUrl,
+        mediaHash: ('0x' + contentHash) as `0x${string}`,
+        mediaType: 'text/plain',
         creators: [{
           name: config.near.accountId,
           address: account.address as Address,
@@ -565,7 +574,7 @@ export const registerWorkTool = {
         ],
       });
 
-      const nftMetadata = { name: params.title, description: 'Derivative work' };
+      const nftMetadata = { name: params.title, description: `Derivative work: ${params.title}`, external_url: mediaUrl };
 
       const [ipMetadataURI, nftMetadataURI] = await Promise.all([
         uploadToIPFS(config, ipMetadata),
@@ -588,6 +597,9 @@ export const registerWorkTool = {
       // For the derivData path, read the actual minting fee from PIL so we don't
       // revert with "minting fee exceeded" when the parent charges more than a fixed cap.
       let maxMintingFee = BigInt(0);
+      // With reciprocal terms the derivative inherits the parent's revShare;
+      // report that instead of the caller's number, which the chain ignores.
+      let inheritedRevShare: number | undefined;
       if (!params.license_token_id && params.parent_license_terms_id) {
         try {
           const { createPublicClient: _pilPc } = await import('viem');
@@ -624,6 +636,9 @@ export const registerWorkTool = {
             args: [BigInt(params.parent_license_terms_id)],
           }) as any;
           maxMintingFee = terms.defaultMintingFee ?? BigInt(0);
+          if (terms.derivativesReciprocal && terms.commercialRevShare !== undefined) {
+            inheritedRevShare = Number(terms.commercialRevShare) / 1_000_000; // uint32, 10% = 10_000_000
+          }
         } catch {
           // PIL query failed — fall back to 1 WIP so the call still has a chance to succeed
           maxMintingFee = BigInt(10) ** BigInt(18);
@@ -654,11 +669,15 @@ export const registerWorkTool = {
         });
       }
 
+      const effectiveRevShare = inheritedRevShare ?? params.revenue_share ?? 5;
+      const licenseTermsIds = params.parent_license_terms_id ? [params.parent_license_terms_id] : undefined;
       const result = {
         success: true,
         ipId: response.ipId,
         txHash: response.txHash,
         parentIpId: params.parent_ip_id,
+        licenseTermsIds,
+        mediaUrl,
         explorerUrl: `https://${config.story.chainId === 'aeneid' ? 'aeneid.' : ''}explorer.story.foundation/ipa/${response.ipId}`,
       };
 
@@ -669,17 +688,21 @@ export const registerWorkTool = {
         await postToVolem(config, {
           ipId: response.ipId!,
           title: params.title,
-          description: 'Derivative work',
+          description: `Derivative work: ${params.title}`,
           ipType: `text/${params.type}`,
+          mediaUrl,
+          metadataUri: ipMetadataURI,
+          metadataHash: ipMetadataHash,
           nftContract: spgContract!,
           license: 'commercial-remix',
-          revenueShare: params.revenue_share ?? 5,
+          revenueShare: effectiveRevShare,
           mintingFee: '0',
           isCommercial: true,
           nearAccount: config.near.accountId,
           parentIpId: params.parent_ip_id,
           contentHash,
           txHash: response.txHash,
+          licenseTermsIds,
         });
       }
 
