@@ -33,6 +33,8 @@ interface Registration {
 interface SearchResult {
   total: number;
   source: 'local' | 'volem' | 'story';
+  /** Set when a remote backend failed and results fell back to local data. */
+  note?: string;
   works: Array<{
     ipId: string;
     title: string;
@@ -79,7 +81,7 @@ async function searchVolem(
   config: Config,
   params: { query?: string; creator?: string; type?: string; limit?: number },
 ): Promise<SearchResult> {
-  const baseUrl = config.volemApiUrl ?? 'http://localhost:3005';
+  const baseUrl = config.volemApiUrl ?? 'http://localhost:3010';
   const searchParams = new URLSearchParams();
   if (params.query) searchParams.set('q', params.query);
   if (params.creator) searchParams.set('owner', params.creator);
@@ -90,7 +92,12 @@ async function searchVolem(
     const res = await fetch(`${baseUrl}/api/ip/search?${searchParams}`, {
       signal: AbortSignal.timeout(10_000),
     });
-    if (!res.ok) return listOwn({ type: params.type }); // fallback to local
+    if (!res.ok) {
+      return {
+        ...listOwn({ type: params.type }),
+        note: `Volem search failed (HTTP ${res.status} from ${baseUrl}) — showing local registrations only`,
+      };
+    }
 
     const data = await res.json() as { total: number; assets: Array<{
       ipId: string; title: string; ipType?: string; license?: string;
@@ -112,8 +119,11 @@ async function searchVolem(
         parentIpId: a.parentIpId,
       })),
     };
-  } catch {
-    return listOwn({ type: params.type }); // fallback to local
+  } catch (err) {
+    return {
+      ...listOwn({ type: params.type }),
+      note: `Volem unreachable at ${baseUrl} (${err instanceof Error ? err.message : String(err)}) — showing local registrations only`,
+    };
   }
 }
 
@@ -239,7 +249,7 @@ export const searchTool = {
 
     // Try Volem API for full details
     if (backend === 'volem') {
-      const baseUrl = config.volemApiUrl ?? 'http://localhost:3005';
+      const baseUrl = config.volemApiUrl ?? 'http://localhost:3010';
       try {
         const res = await fetch(`${baseUrl}/api/ip/${ipId}`, {
           signal: AbortSignal.timeout(10_000),
