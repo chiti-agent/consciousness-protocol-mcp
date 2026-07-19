@@ -7,6 +7,7 @@ import type { Config } from '../config/store.js';
 import { loadKey, REGISTRATIONS_FILE } from '../config/store.js';
 import { cappedHttp } from '../config/fee-cap.js';
 import { encryptContent, ENCRYPTED_MIME } from '../content-crypto.js';
+import { postToVolem, supportsGatedRegistration } from '../volem-registration.js';
 import { readFileSync, writeFileSync, existsSync } from 'node:fs';
 
 // Lazy-loaded modules — cached after first import
@@ -252,39 +253,6 @@ function logRegistration(entry: object) {
   writeFileSync(REGISTRATIONS_FILE, JSON.stringify(registrations, null, 2));
 }
 
-async function postToVolem(config: Config, data: Record<string, unknown>) {
-  const baseUrl = config.volemApiUrl ?? 'http://localhost:3010';
-  try {
-    const { privateKeyToAccount } = await import('viem/accounts');
-    const { signMessage } = await import('viem/accounts');
-    const pk = loadKey('evm');
-    const account = privateKeyToAccount(pk as `0x${string}`);
-
-    // Sign auth message: "volem:<timestamp>"
-    const timestamp = String(Date.now());
-    const message = `volem:${timestamp}`;
-    const signature = await account.signMessage({ message });
-    const authHeader = `EVM ${account.address}:${timestamp}:${signature}`;
-
-    const res = await fetch(`${baseUrl}/api/ip/register`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': authHeader,
-      },
-      body: JSON.stringify(data),
-      signal: AbortSignal.timeout(10_000),
-    });
-    if (!res.ok) {
-      const err = await res.text();
-      console.error(`Volem register failed: ${res.status} ${err}`);
-    }
-  } catch (err) {
-    // Non-critical: Volem is a showcase, Story Protocol is the source of truth
-    console.error('Volem write failed (non-critical):', err);
-  }
-}
-
 export const registerWorkTool = {
   async register(config: Config, params: {
     title: string;
@@ -308,6 +276,14 @@ export const registerWorkTool = {
         return { success: false, error: 'Either content or file_path is required' };
       }
 
+      const gated = params.content_access === 'gated';
+      if (gated && !supportsGatedRegistration(config)) {
+        return {
+          success: false,
+          error: 'Gated registration requires backend=volem so the only decryption key has a durable authorization store.',
+        };
+      }
+
       const client = await getStoryClient(config);
       await ensureImports();
       type Address = `0x${string}`;
@@ -316,7 +292,6 @@ export const registerWorkTool = {
       const account = _privateKeyToAccount(pk as `0x${string}`);
 
       // Handle text content or file
-      const gated = params.content_access === 'gated';
       let contentHash: string;
       let ipType: string;
       let mediaUrl: string | undefined;
@@ -514,16 +489,9 @@ export const registerWorkTool = {
         explorerUrl: `https://${config.story.chainId === 'aeneid' ? 'aeneid.' : ''}explorer.story.foundation/ipa/${response.ipId}`,
       };
 
-      logRegistration({
-        ...result, title: params.title, type: params.type,
-        license: licenseType, revenueShare: revShare,
-        nftContract: spgContract, nearAccount: config.near.accountId,
-        chainSequence: params.chain_sequence, chainHash: params.chain_hash,
-      });
-
       // Write to Volem API if backend=volem
       if (config.backend === 'volem' || !config.backend) {
-        await postToVolem(config, {
+        const volemWrite = await postToVolem(config, {
           ipId: response.ipId!,
           title: params.title,
           description: `AI-generated ${params.type} with blockchain provenance`,
@@ -552,7 +520,25 @@ export const registerWorkTool = {
             encryptedMediaType,
           }),
         });
+
+        if (gated && !volemWrite.ok) {
+          return {
+            ...result,
+            success: false,
+            registeredOnStory: true,
+            contentAccess: 'GATED',
+            encryptedMediaType,
+            error: `Story registration succeeded, but gated key persistence failed. The Story IP remains on-chain but is not usable as gated content; register the work again after Volem recovers. ${volemWrite.error}`,
+          };
+        }
       }
+
+      logRegistration({
+        ...result, title: params.title, type: params.type,
+        license: licenseType, revenueShare: revShare,
+        nftContract: spgContract, nearAccount: config.near.accountId,
+        chainSequence: params.chain_sequence, chainHash: params.chain_hash,
+      });
 
       return {
         ...result,

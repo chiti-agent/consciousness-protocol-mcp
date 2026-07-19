@@ -13,6 +13,8 @@ import { homedir } from 'node:os';
 import type { Config } from '../config/store.js';
 import { loadKey } from '../config/store.js';
 import { decryptContent } from '../content-crypto.js';
+import { fetchIpfs } from '../ipfs.js';
+import { getCommittedContentHash, readStoryIpMetadata, type StoryIpMetadata } from '../story-metadata.js';
 
 const DOWNLOADS_DIR = join(homedir(), '.consciousness-protocol', 'downloads');
 
@@ -37,11 +39,20 @@ async function volemAuthHeader(): Promise<string> {
 const isTextMime = (mime: string | null | undefined): boolean =>
   !!mime && (mime.startsWith('text/') || mime === 'application/json');
 
-const resolveIpfsUrl = (url: string, gateway?: string): string => {
-  if (!url.startsWith('ipfs://')) return url;
-  const base = gateway ?? 'https://gateway.pinata.cloud/ipfs/';
-  return (base.endsWith('/') ? base : base + '/') + url.slice('ipfs://'.length);
-};
+export function assertVolemMatchesStory(
+  asset: Pick<VolemAsset, 'mediaUrl' | 'contentHash'>,
+  metadata: StoryIpMetadata,
+  committedContentHash: string,
+): string {
+  if (!metadata.mediaUrl) throw new Error('Verified Story metadata has no mediaUrl');
+  if (asset.mediaUrl && asset.mediaUrl !== metadata.mediaUrl) {
+    throw new Error('Volem mediaUrl does not match the verified Story metadata');
+  }
+  if (asset.contentHash && asset.contentHash.toLowerCase() !== committedContentHash) {
+    throw new Error('Volem contentHash does not match the verified Story metadata');
+  }
+  return metadata.mediaUrl;
+}
 
 export const contentTool = {
   async get(config: Config, params: { ip_id: string; output_path?: string }) {
@@ -56,13 +67,15 @@ export const contentTool = {
       }
       const asset = await assetRes.json() as VolemAsset;
 
-      if (!asset.mediaUrl) {
-        return { success: false, error: 'Asset has no media content (external URL only?)' };
-      }
+      // Volem decides whether this wallet may receive the key. Provenance and
+      // delivery location come from Story's on-chain metadata commitment.
+      const { metadata } = await readStoryIpMetadata(config, params.ip_id);
+      const committedContentHash = getCommittedContentHash(metadata);
+      const mediaUrl = assertVolemMatchesStory(asset, metadata, committedContentHash);
 
       const gated = asset.contentAccess === 'GATED';
       let key: string | undefined;
-      let effectiveMime = asset.ipType ?? null;
+      let effectiveMime = metadata.mediaType ?? asset.ipType ?? null;
 
       if (gated) {
         const keyRes = await fetch(`${baseUrl}/api/ip/${params.ip_id}/content-key`, {
@@ -84,34 +97,33 @@ export const contentTool = {
         effectiveMime = keyData.encryptedMediaType ?? asset.encryptedMediaType ?? effectiveMime;
       }
 
-      const blobRes = await fetch(resolveIpfsUrl(asset.mediaUrl, config.ipfs.gateway), { signal: AbortSignal.timeout(30_000) });
-      if (!blobRes.ok) {
-        return { success: false, error: `Failed to fetch content from IPFS: HTTP ${blobRes.status}` };
-      }
+      const { response: blobRes } = await fetchIpfs(mediaUrl, {
+        preferredGateway: config.ipfs.gateway,
+        timeoutMs: 30_000,
+      });
       const raw = Buffer.from(await blobRes.arrayBuffer());
       const plain = gated ? decryptContent(raw, key!) : raw;
 
-      // Provenance: the registered contentHash covers the plaintext
+      // Success is impossible until plaintext matches the on-chain commitment.
       const plainHash = createHash('sha256').update(plain).digest('hex');
-      const provenanceVerified = asset.contentHash ? plainHash === asset.contentHash : null;
+      if (plainHash !== committedContentHash) {
+        throw new Error('Content hash mismatch: delivered plaintext does not match verified Story metadata');
+      }
 
       const base = {
         success: true,
         ipId: params.ip_id,
-        title: asset.title,
+        title: metadata.title ?? asset.title,
         mediaType: effectiveMime,
         gated,
-        provenanceVerified,
-        ...(provenanceVerified === false && {
-          warning: 'Content hash mismatch — the delivered bytes do not match the registered contentHash.',
-        }),
+        provenanceVerified: true,
       };
 
       if (isTextMime(effectiveMime) && !params.output_path) {
         return { ...base, content: plain.toString('utf-8') };
       }
 
-      const ext = effectiveMime ? '.' + (effectiveMime.split('/')[1] ?? 'bin') : (extname(asset.mediaUrl) || '.bin');
+      const ext = effectiveMime ? '.' + (effectiveMime.split('/')[1] ?? 'bin') : (extname(mediaUrl) || '.bin');
       const outPath = params.output_path ?? join(DOWNLOADS_DIR, `${params.ip_id}${ext}`);
       mkdirSync(dirname(outPath), { recursive: true });
       writeFileSync(outPath, plain);
