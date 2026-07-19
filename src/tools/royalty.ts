@@ -14,6 +14,7 @@ import { readFileSync, existsSync } from 'node:fs';
 const ROYALTY_MODULE = '0xD2f60c40fEbccf6311f8B47c4f2Ec6b040400086';
 const WIP_TOKEN = '0x1514000000000000000000000000000000000000';
 const ROYALTY_POLICY_LAP = '0xBe54FB168b3c982b7AaE60dB6CF75Bd8447b390E';
+const ROYALTY_POLICY_LRP = '0x9156e603C949481883B1d3355c6f1132D191fC41';
 
 const PIL = '0x2E896b0b2Fdb7457499B56AAaA4AE55BCB4Cd316';
 const LICENSE_REGISTRY = '0x529a750E02d8E2f15649c13D69a465286a780e24';
@@ -111,17 +112,38 @@ const WIP_ABI = [
   },
 ] as const;
 
-const LAP_ABI = [{
-  inputs: [
-    { name: 'ipId', type: 'address' },
-    { name: 'ancestorIpId', type: 'address' },
-    { name: 'token', type: 'address' },
-  ],
-  name: 'getTransferredTokens',
-  outputs: [{ type: 'uint256' }],
-  stateMutability: 'view',
-  type: 'function',
-}] as const;
+// Shared by RoyaltyPolicyLAP and RoyaltyPolicyLRP (IGraphAwareRoyaltyPolicy).
+// getPolicyRoyalty is declared non-view on LRP but reads fine via eth_call.
+const POLICY_ABI = [
+  {
+    inputs: [
+      { name: 'ipId', type: 'address' },
+      { name: 'ancestorIpId', type: 'address' },
+      { name: 'token', type: 'address' },
+    ],
+    name: 'getTransferredTokens',
+    outputs: [{ type: 'uint256' }],
+    stateMutability: 'view',
+    type: 'function',
+  },
+  {
+    inputs: [
+      { name: 'ipId', type: 'address' },
+      { name: 'ancestorIpId', type: 'address' },
+    ],
+    name: 'getPolicyRoyalty',
+    outputs: [{ type: 'uint32' }],
+    stateMutability: 'view',
+    type: 'function',
+  },
+  {
+    inputs: [{ name: 'ipId', type: 'address' }],
+    name: 'getPolicyRoyaltyStack',
+    outputs: [{ type: 'uint32' }],
+    stateMutability: 'view',
+    type: 'function',
+  },
+] as const;
 
 type Registration = {
   success?: boolean;
@@ -235,6 +257,28 @@ export function computeChildRevShare(
 ): { expected: bigint; pending: bigint } {
   const revShareBps = Math.round(revSharePct * 100); // basis points, integer-safe for BigInt
   const expected = (childRevenue * BigInt(revShareBps)) / BigInt(10000);
+  const pending = expected > transferred ? expected - transferred : BigInt(0);
+  return { expected, pending };
+}
+
+/**
+ * Exact per-child pending math mirroring the policy contracts' transferToVault:
+ *   max = childRevenue × policyPct / 10^8
+ *   max -= max × ancestorStackPct / 10^8   (LRP only: my own ancestors' cut)
+ *   pending = max − transferred
+ * policyPct comes from getPolicyRoyalty(child, me) — for LAP it is the flat
+ * share at any depth, for LRP it already encodes the multiplicative decay.
+ * Scale: 10^8 = 100% (maxPercent).
+ */
+export function computePolicyPending(
+  childRevenue: bigint,
+  policyPct: number,
+  ancestorStackPct: number,
+  transferred: bigint,
+): { expected: bigint; pending: bigint } {
+  const MAX_PCT = BigInt(100_000_000);
+  let expected = (childRevenue * BigInt(policyPct)) / MAX_PCT;
+  expected -= (expected * BigInt(ancestorStackPct)) / MAX_PCT;
   const pending = expected > transferred ? expected - transferred : BigInt(0);
   return { expected, pending };
 }
@@ -454,13 +498,18 @@ export const royaltyTool = {
 
       for (const childIpId of allDescendantIpIds) {
         const isDirect = directChildIdSet.has(childIpId);
-        // When using Volem API we don't have rev share % inline — default to 10%.
-        // The on-chain LAP contract enforces the actual percentage regardless of
-        // what we display here; this is only used for the estimated pending calc.
-        const revenueSharePct = await getRevShareForIp(publicClient, childIpId as `0x${string}`) ?? 10;
 
         try {
-          const [childRevenue, transferred] = await Promise.all([
+          // Each child settles through its own royalty policy contract — LAP
+          // and LRP both track transfers and percentages, but with different
+          // math (LAP: flat share at any depth; LRP: decay + ancestor-stack
+          // deduction). Read everything from the child's actual policy.
+          const childPolicy =
+            (await getRoyaltyPolicyForIp(publicClient, childIpId as `0x${string}`)) ??
+            (ROYALTY_POLICY_LAP as Address);
+          const isLrpChild = childPolicy.toLowerCase() === ROYALTY_POLICY_LRP.toLowerCase();
+
+          const [childRevenue, transferred, policyPct, stackPct] = await Promise.all([
             publicClient.readContract({
               address: ROYALTY_MODULE as Address,
               abi: ROYALTY_MODULE_ABI,
@@ -468,15 +517,29 @@ export const royaltyTool = {
               args: [childIpId as Address, WIP_TOKEN as Address],
             }) as Promise<bigint>,
             publicClient.readContract({
-              address: ROYALTY_POLICY_LAP as Address,
-              abi: LAP_ABI,
+              address: childPolicy,
+              abi: POLICY_ABI,
               functionName: 'getTransferredTokens',
               args: [childIpId as Address, ipId, WIP_TOKEN as Address],
             }) as Promise<bigint>,
+            publicClient.readContract({
+              address: childPolicy,
+              abi: POLICY_ABI,
+              functionName: 'getPolicyRoyalty',
+              args: [childIpId as Address, ipId],
+            }).then(Number) as Promise<number>,
+            isLrpChild
+              ? (publicClient.readContract({
+                  address: childPolicy,
+                  abi: POLICY_ABI,
+                  functionName: 'getPolicyRoyaltyStack',
+                  args: [ipId],
+                }).then(Number) as Promise<number>)
+              : Promise.resolve(0),
           ]);
 
-          // Expected revenue share based on actual percentage from license terms
-          const { pending } = computeChildRevShare(childRevenue, transferred, revenueSharePct);
+          const revenueSharePct = policyPct / 1_000_000;
+          const { pending } = computePolicyPending(childRevenue, policyPct, stackPct, transferred);
 
           revenueShareTransferred += transferred;
           revenueSharePending += pending;
@@ -716,29 +779,62 @@ export const royaltyTool = {
             args: [ip, WIP_TOKEN as Address],
           }) as bigint;
 
-          // Collect ALL descendants (direct + grandchildren + deeper). LAP uses the
-          // IP graph precompile internally to compute the correct ancestor share
-          // for any depth. Filter out zero-revenue descendants because
-          // claimAllRevenue reverts with "Array index out of bounds" (0xa05b90b8)
-          // on them.
+          // Collect ALL descendants (direct + grandchildren + deeper). Include a
+          // child only when it has an UNTRANSFERRED share for this ancestor
+          // (policy math, mirrors transferToVault): claimAllRevenue reverts with
+          // "Array index out of bounds" (0xa05b90b8) both for zero-revenue
+          // children and for children whose share was already fully moved by an
+          // earlier claim — one bad child kills the whole atomic batch.
           const descendantIds = await fetchDerivatives(ipId, true, volemApiUrl);
           const perChild = await Promise.all(
             descendantIds.map(async (id) => {
               const child = id as Address;
-              const revenue = await (publicClient.readContract({
-                address: ROYALTY_MODULE as Address,
-                abi: ROYALTY_MODULE_ABI,
-                functionName: 'totalRevenueTokensReceived',
-                args: [child, WIP_TOKEN as Address],
-              }) as Promise<bigint>).catch(() => BigInt(0));
+              try {
+                const revenue = await publicClient.readContract({
+                  address: ROYALTY_MODULE as Address,
+                  abi: ROYALTY_MODULE_ABI,
+                  functionName: 'totalRevenueTokensReceived',
+                  args: [child, WIP_TOKEN as Address],
+                }) as bigint;
 
-              if (revenue <= BigInt(0)) return null;
+                if (revenue <= BigInt(0)) return null;
 
-              // Pair each child with its actual on-chain royalty policy, not a
-              // hardcoded LAP: a mismatched policy makes claimAllRevenue revert
-              // atomically, dropping the ancestor's own claim too.
-              const policy = (await getRoyaltyPolicyForIp(publicClient, child)) ?? (ROYALTY_POLICY_LAP as Address);
-              return { child, policy };
+                // Pair each child with its actual on-chain royalty policy, not a
+                // hardcoded LAP: a mismatched policy makes claimAllRevenue revert
+                // atomically, dropping the ancestor's own claim too.
+                const policy = (await getRoyaltyPolicyForIp(publicClient, child)) ?? (ROYALTY_POLICY_LAP as Address);
+                const isLrpChild = policy.toLowerCase() === ROYALTY_POLICY_LRP.toLowerCase();
+
+                const [transferred, policyPct, stackPct] = await Promise.all([
+                  publicClient.readContract({
+                    address: policy,
+                    abi: POLICY_ABI,
+                    functionName: 'getTransferredTokens',
+                    args: [child, ip, WIP_TOKEN as Address],
+                  }) as Promise<bigint>,
+                  publicClient.readContract({
+                    address: policy,
+                    abi: POLICY_ABI,
+                    functionName: 'getPolicyRoyalty',
+                    args: [child, ip],
+                  }).then(Number) as Promise<number>,
+                  isLrpChild
+                    ? (publicClient.readContract({
+                        address: policy,
+                        abi: POLICY_ABI,
+                        functionName: 'getPolicyRoyaltyStack',
+                        args: [ip],
+                      }).then(Number) as Promise<number>)
+                    : Promise.resolve(0),
+                ]);
+
+                const { pending } = computePolicyPending(revenue, policyPct, stackPct, transferred);
+                if (pending <= BigInt(0)) return null;
+
+                return { child, policy };
+              } catch {
+                return null;
+              }
             }),
           );
           const claimableChildren = perChild.filter((entry): entry is { child: Address; policy: Address } => entry !== null);

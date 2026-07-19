@@ -13,6 +13,7 @@ import {
   findAllDescendants,
   resolveVolemApiUrl,
   computeChildRevShare,
+  computePolicyPending,
   computeFinancialSummary,
 } from '../src/tools/royalty.js';
 import type { Config } from '../src/config/store.js';
@@ -306,6 +307,49 @@ describe('computeChildRevShare', () => {
     const { expected, pending } = computeChildRevShare(1000n, 60n, 10);
     assert.equal(expected, 100n);
     assert.equal(pending, 40n);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 4b. computePolicyPending — exact transferToVault mirror (10^8 = 100%)
+// ---------------------------------------------------------------------------
+
+describe('computePolicyPending', () => {
+  const WEI = (n: number) => BigInt(Math.round(n * 1e18));
+
+  it('LAP flat share: 10% of any-depth descendant, no stack deduction', () => {
+    // act3 numbers: 0.1 payment on L6, ROOT expects 0.01 at any depth
+    const { expected, pending } = computePolicyPending(WEI(0.1), 10_000_000, 0, 0n);
+    assert.equal(expected, WEI(0.01));
+    assert.equal(pending, WEI(0.01));
+  });
+
+  it('LRP direct parent: 10% minus own ancestor stack (act7 L1 case)', () => {
+    // 0.09 on L2; L1 policyPct=10%, L1 stack=10% (its parent ROOT)
+    // max = 0.009, minus 10% = 0.0081
+    const { expected } = computePolicyPending(WEI(0.09), 10_000_000, 10_000_000, 0n);
+    assert.equal(expected, WEI(0.0081));
+  });
+
+  it('LRP grandparent: decayed 1%, empty stack (act7 ROOT case)', () => {
+    const { expected } = computePolicyPending(WEI(0.09), 1_000_000, 0, 0n);
+    assert.equal(expected, WEI(0.0009));
+  });
+
+  it('fully transferred → pending 0 (post-claim state)', () => {
+    const { pending } = computePolicyPending(WEI(0.09), 1_000_000, 0, WEI(0.0009));
+    assert.equal(pending, 0n);
+  });
+
+  it('over-transferred clamps to 0, never negative', () => {
+    const { pending } = computePolicyPending(1000n, 10_000_000, 0, 500n);
+    assert.equal(pending, 0n);
+  });
+
+  it('unrelated node: policyPct 0 → expected 0', () => {
+    const { expected, pending } = computePolicyPending(WEI(1), 0, 0, 0n);
+    assert.equal(expected, 0n);
+    assert.equal(pending, 0n);
   });
 });
 

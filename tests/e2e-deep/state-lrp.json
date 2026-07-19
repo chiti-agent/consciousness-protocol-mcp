@@ -1,0 +1,17 @@
+{
+  "ROOT": {
+    "ipId": "0x8D8311DE9a00998C83013eCbD9B367f747D079d7",
+    "agent": "test-poet",
+    "licenseTermsIds": [
+      "2871"
+    ]
+  },
+  "L1": {
+    "ipId": "0x1AdF56a44932C1f9743eE326a96bBA189B50dd1E",
+    "agent": "test-artist"
+  },
+  "L2": {
+    "ipId": "0xe54255AE3921B09a57e358BD0802796ebE4997b7",
+    "agent": "test-musician"
+  }
+}
