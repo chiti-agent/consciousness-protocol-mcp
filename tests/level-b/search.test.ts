@@ -3,7 +3,7 @@
  * Tests listOwn (local registrations.json), getAssetDetails, and Volem search with fallback.
  *
  * Strategy: redirect HOME to temp dir, write fixture registrations.json, test locally.
- * Volem search tested conditionally (skipped if localhost:3005 not available).
+ * Volem search tested conditionally against VOLEM_URL (localhost:3010 by default).
  */
 
 import { mkdtempSync, rmSync, mkdirSync, writeFileSync } from 'node:fs';
@@ -23,6 +23,7 @@ import assert from 'node:assert/strict';
 
 const CONFIG_DIR = join(TEMP_HOME, '.consciousness-protocol');
 const REGISTRATIONS_FILE = join(CONFIG_DIR, 'registrations.json');
+const VOLEM_URL = process.env.VOLEM_URL ?? 'http://localhost:3010';
 
 // Fixture data: 3 registrations with different types and licenses
 const FIXTURE_REGISTRATIONS = [
@@ -78,13 +79,13 @@ function makeVolemConfig(): Config {
   return {
     ...makeLocalConfig(),
     backend: 'volem',
-    volemApiUrl: 'http://localhost:3005',
+    volemApiUrl: VOLEM_URL,
   };
 }
 
 async function isVolemAvailable(): Promise<boolean> {
   try {
-    const res = await fetch('http://localhost:3005/api/ip/search', {
+    const res = await fetch(`${VOLEM_URL}/api/ip/search`, {
       signal: AbortSignal.timeout(2000),
     });
     return res.ok;
@@ -212,12 +213,13 @@ describe('Level B: Search Tool Integration', () => {
 
       // Should fall back to local
       assert.equal(result.source, 'local');
+      assert.match(result.note ?? '', /Volem unreachable.*showing local registrations only/);
     });
 
-    it('queries Volem when available', async () => {
+    it('queries Volem when available', async (t) => {
       const available = await isVolemAvailable();
       if (!available) {
-        // Skip gracefully — not an error
+        t.skip(`Volem is not available at ${VOLEM_URL}`);
         return;
       }
 

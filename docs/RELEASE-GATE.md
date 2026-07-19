@@ -1,8 +1,9 @@
 # Release Gate
 
 Lesson #156: "tests green + review passed" ≠ "the product works". A release
-(npm publish, hosted deploy, mainnet) passes only when ALL three layers are
-green: unit, live E2E acts, and a human click-test of Volem.
+(npm publish, hosted deploy, mainnet) passes only when ALL four layers are
+green: static/unit checks, live suites, deep-E2E acts, and a human click-test
+of Volem.
 
 ## Layer 1 — static + unit (minutes, free)
 
@@ -13,8 +14,16 @@ npm test                 # unit suites, no chain
 
 ## Layer 2 — live suites (Aeneid, ~0.1 IP total)
 
-Prereqs: funded test wallets (`node --import tsx/esm tests/wallets/fund-wallets.ts`),
-Volem running with the e2e DB (`VOLEM_URL=http://localhost:3010`).
+Prereqs: funded test wallets and Volem running with the e2e DB
+(`VOLEM_URL=http://localhost:3010`). The funding script is faucet-only by
+default and never reads the configured production identity:
+
+```bash
+node --import tsx/esm tests/wallets/fund-wallets.ts
+
+# Optional, explicit fallback authority when the faucet cannot fund wallets:
+MAIN_WALLET_KEY=0x... node --import tsx/esm tests/wallets/fund-wallets.ts
+```
 
 Run level-b **one file at a time** — suites share test wallets, parallel runs
 collide on nonces ("already known" mempool rejects):

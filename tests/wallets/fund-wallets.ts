@@ -1,13 +1,16 @@
 /**
  * Fund test wallets on Story Aeneid testnet.
- * Strategy: try faucet first, fallback to transfer from main wallet.
+ * Strategy: try faucet first; transfer from a main wallet only when its key is
+ * supplied explicitly through MAIN_WALLET_KEY for this command.
  *
  * Run: node --import tsx/esm tests/wallets/fund-wallets.ts
  */
 
 import { createPublicClient, createWalletClient, http, parseEther, formatEther } from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
+import { pathToFileURL } from 'node:url';
 import { generateWallets, type TestWallet } from './generate-wallets.js';
+import { resolveMainFundingKey } from './funding-authority.js';
 
 // Story Aeneid testnet
 const AENEID_RPC = 'https://aeneid.storyrpc.io';
@@ -120,16 +123,11 @@ async function main(): Promise<void> {
 
   const wallets = generateWallets();
 
-  // Main wallet key: env override, otherwise the configured evm key
-  let mainKey = process.env.MAIN_WALLET_KEY;
+  // An explicit environment value is the complete funding authority. Never
+  // fall back to the configured production identity for a test prerequisite.
+  const mainKey = resolveMainFundingKey();
   if (!mainKey) {
-    try {
-      const { loadKey } = await import('../../src/config/store.js');
-      mainKey = loadKey('evm');
-      console.log('Using configured evm key as funding source.');
-    } catch {
-      console.log('NOTE: no MAIN_WALLET_KEY and no configured evm key. Faucet-only mode.');
-    }
+    console.log('NOTE: no explicit MAIN_WALLET_KEY. Faucet-only mode; configured identity will not be used.');
     console.log();
   }
 
@@ -141,7 +139,9 @@ async function main(): Promise<void> {
   console.log('Funding complete.');
 }
 
-main().catch((err) => {
-  console.error('Funding failed:', err);
-  process.exit(1);
-});
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  main().catch((err) => {
+    console.error('Funding failed:', err);
+    process.exit(1);
+  });
+}
