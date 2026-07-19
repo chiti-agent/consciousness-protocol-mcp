@@ -832,7 +832,10 @@ export const royaltyTool = {
                 if (pending <= BigInt(0)) return null;
 
                 return { child, policy };
-              } catch {
+              } catch (err: any) {
+                // A read failure here drops the child from this claim — record
+                // it so a skipped-but-owed child is diagnosable, not silent.
+                errors.push({ ipId: child, error: `child share read failed, skipped: ${err.message || String(err)}` });
                 return null;
               }
             }),
