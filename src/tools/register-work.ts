@@ -6,6 +6,7 @@ import { createHash } from 'node:crypto';
 import type { Config } from '../config/store.js';
 import { loadKey, REGISTRATIONS_FILE } from '../config/store.js';
 import { cappedHttp } from '../config/fee-cap.js';
+import { encryptContent, ENCRYPTED_MIME } from '../content-crypto.js';
 import { readFileSync, writeFileSync, existsSync } from 'node:fs';
 
 // Lazy-loaded modules — cached after first import
@@ -298,6 +299,7 @@ export const registerWorkTool = {
     minting_fee?: string;
     royalty_policy?: RoyaltyPolicyChoice;
     reciprocal?: boolean;
+    content_access?: 'public' | 'gated';
     chain_sequence?: number;
     chain_hash?: string;
   }) {
@@ -314,9 +316,13 @@ export const registerWorkTool = {
       const account = _privateKeyToAccount(pk as `0x${string}`);
 
       // Handle text content or file
+      const gated = params.content_access === 'gated';
       let contentHash: string;
       let ipType: string;
       let mediaUrl: string | undefined;
+      let contentKeyHex: string | undefined;
+      let encryptedMediaType: string | undefined;
+      let mediaHashHex: string | undefined; // hash of the bytes actually at mediaUrl
 
       if (params.file_path) {
         const { extname } = await import('node:path');
@@ -347,8 +353,20 @@ export const registerWorkTool = {
           return { success: false, error: `MIME type "${ipType}" is not allowed. Archives and executables cannot be registered as IP. Use a git repo URL or package registry instead.` };
         }
 
-        // Upload file to IPFS
-        mediaUrl = await uploadFileToIPFS(config, fileBuffer, params.title + ext);
+        // Upload file to IPFS. GATED: the encrypted blob goes public, the key
+        // stays with Volem — contentHash keeps covering the PLAINTEXT for
+        // provenance, mediaHash covers the bytes actually at mediaUrl.
+        if (gated) {
+          const { blob, keyHex } = encryptContent(fileBuffer);
+          contentKeyHex = keyHex;
+          encryptedMediaType = ipType;
+          ipType = ENCRYPTED_MIME;
+          mediaHashHex = createHash('sha256').update(blob).digest('hex');
+          mediaUrl = await uploadFileToIPFS(config, blob, params.title + ext + '.enc');
+        } else {
+          mediaHashHex = contentHash;
+          mediaUrl = await uploadFileToIPFS(config, fileBuffer, params.title + ext);
+        }
       } else {
         contentHash = createHash('sha256').update(params.content!).digest('hex');
         ipType = params.media_type || textMimeFor(params.type);
@@ -416,16 +434,26 @@ export const registerWorkTool = {
       // For text content: upload the text itself to IPFS as media
       if (!mediaUrl && params.content) {
         const textBuffer = Buffer.from(params.content, 'utf-8');
-        mediaUrl = await uploadFileToIPFS(config, textBuffer, `${params.title}.txt`);
+        if (gated) {
+          const { blob, keyHex } = encryptContent(textBuffer);
+          contentKeyHex = keyHex;
+          encryptedMediaType = ipType;
+          mediaHashHex = createHash('sha256').update(blob).digest('hex');
+          mediaUrl = await uploadFileToIPFS(config, blob, `${params.title}.txt.enc`);
+          metadataInput.mediaType = ENCRYPTED_MIME;
+        } else {
+          mediaHashHex = contentHash;
+          mediaUrl = await uploadFileToIPFS(config, textBuffer, `${params.title}.txt`);
+          metadataInput.mediaType = 'text/plain';
+        }
         metadataInput.mediaUrl = mediaUrl;
-        metadataInput.mediaHash = '0x' + contentHash;
-        metadataInput.mediaType = 'text/plain';
+        metadataInput.mediaHash = '0x' + mediaHashHex;
       }
 
       // Add media fields for file-based content
       if (mediaUrl && !metadataInput.mediaUrl) {
         metadataInput.mediaUrl = mediaUrl;
-        metadataInput.mediaHash = '0x' + contentHash;
+        metadataInput.mediaHash = '0x' + (mediaHashHex ?? contentHash);
         metadataInput.mediaType = ipType;
       }
 
@@ -499,7 +527,9 @@ export const registerWorkTool = {
           ipId: response.ipId!,
           title: params.title,
           description: `AI-generated ${params.type} with blockchain provenance`,
-          ipType: ipType,
+          // GATED: Volem stores the ORIGINAL MIME (filters/thumbnails work);
+          // the viewer is gated by contentAccess, mediaUrl holds the blob.
+          ipType: encryptedMediaType ?? ipType,
           ipCategory: params.ip_category,
           mediaUrl,
           externalUrl: params.url,
@@ -516,10 +546,18 @@ export const registerWorkTool = {
           chainHash: params.chain_hash,
           txHash: response.txHash,
           licenseTermsIds: response.licenseTermsIds?.map(String),
+          ...(gated && {
+            contentAccess: 'GATED',
+            contentKey: contentKeyHex,
+            encryptedMediaType,
+          }),
         });
       }
 
-      return result;
+      return {
+        ...result,
+        ...(gated && { contentAccess: 'GATED', encryptedMediaType }),
+      };
     } catch (err: any) {
       return { success: false, error: err.message || String(err) };
     }

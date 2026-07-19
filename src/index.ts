@@ -164,6 +164,7 @@ server.tool(
     minting_fee: z.string().default('0').describe('Price to mint a license in IP tokens (e.g. "0.01"). Default: free.'),
     royalty_policy: z.enum(['LAP', 'LRP']).default('LAP').describe('Royalty policy for derivatives. LAP (absolute): every ancestor takes its full revenue_share % of every descendant\'s revenue at any depth — protects the root, taxes deep chains (a node at depth N keeps 100−share×N %). LRP (relative): each node pays only its direct parent — friendly to deep chains, the root\'s take decays with depth. Immutable once attached.'),
     reciprocal: z.boolean().default(true).describe('If true, all derivatives are forced onto these exact terms (whole subtree shares one license). If false, each derivative attaches its own terms.'),
+    content_access: z.enum(['public', 'gated']).default('public').describe('public: content readable by anyone on IPFS (license = provenance + rights). gated: content encrypted before upload — only the owner, license-token holders and derivative owners can decrypt (via get_content). Use gated for skills, datasets, anything where reading IS using.'),
     chain_sequence: z.number().int().min(0).optional().describe('Chain state sequence (for provenance)'),
     chain_hash: z.string().optional().describe('Chain state hash (for provenance)'),
   },
@@ -205,6 +206,21 @@ server.tool(
     if (!config) return { content: [{ type: 'text' as const, text: 'Not configured. Run setup first.' }] };
     const { licenseTool } = await import('./tools/license.js');
     const result = await licenseTool.mint(config, params);
+    return { content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }] };
+  },
+);
+
+server.tool(
+  'get_content',
+  'Fetch an asset\'s content. Public content is returned directly; license-gated content is decrypted automatically when this wallet is authorized (owner, license-token holder, or derivative owner) — otherwise mint_license first. Verifies the plaintext against the registered contentHash (provenance). Text is returned inline, binaries are saved to a file.',
+  {
+    ip_id: z.string().regex(/^0x[a-fA-F0-9]{40}$/, 'Must be a valid Ethereum address').describe('IP Asset ID (0x...)'),
+    output_path: z.string().optional().describe('Where to save binary content (default: ~/.consciousness-protocol/downloads/<ipId>.<ext>)'),
+  },
+  async (params) => {
+    if (!config) return { content: [{ type: 'text' as const, text: 'Not configured. Run setup first.' }] };
+    const { contentTool } = await import('./tools/content.js');
+    const result = await contentTool.get(config, params);
     return { content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }] };
   },
 );
