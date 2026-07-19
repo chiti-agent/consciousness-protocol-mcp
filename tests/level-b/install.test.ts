@@ -25,9 +25,13 @@ const INSTALL_BASE = join(tmpdir(), 'cp-test-installs');
 describe('install_skill', { timeout: 300_000 }, () => {
   before(() => {
     mkdirSync(INSTALL_BASE, { recursive: true });
+    // Redirect the allowed install base into the sandbox — the tool's
+    // path-traversal guard otherwise rejects anything outside ~/.claude/skills.
+    process.env.CP_SKILLS_DIR = INSTALL_BASE;
   });
 
   after(() => {
+    delete process.env.CP_SKILLS_DIR;
     // Cleanup all installed test dirs
     try { rmSync(INSTALL_BASE, { recursive: true, force: true }); } catch {}
   });

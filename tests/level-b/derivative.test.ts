@@ -122,41 +122,31 @@ describe('register_derivative', { timeout: 120_000 }, () => {
     }
   });
 
-  // --- Validation: exactly one of parent_license_terms_id or license_token_id ---
-  it('rejects when both parent_license_terms_id and license_token_id provided', async () => {
-    const config = loadTestConfig('test-developer');
-    const result = await registerWorkTool.registerDerivative(config, {
-      title: 'Should fail',
-      content: 'Both params',
-      type: 'code',
-      parent_ip_id: fixtures['test-developer-code'].ipId,
-      parent_license_terms_id: '1',
-      license_token_id: '999',
-    });
-    assert.equal(result.success, false);
-    assert.ok(result.error?.includes('only one'), `Expected "only one" error, got: ${result.error}`);
-  });
-
-  it('rejects when neither parent_license_terms_id nor license_token_id provided', async () => {
-    const config = loadTestConfig('test-developer');
-    const result = await registerWorkTool.registerDerivative(config, {
-      title: 'Should fail',
-      content: 'No params',
-      type: 'code',
-      parent_ip_id: fixtures['test-developer-code'].ipId,
-    });
-    assert.equal(result.success, false);
-    assert.ok(result.error?.includes('Either'), `Expected "Either" error, got: ${result.error}`);
-  });
-
+  // --- Validation ---
+  // Note: "both params" and "neither param" are now legal — license terms are
+  // auto-resolved and the token auto-minted when omitted; when both are given
+  // the token wins. Only format validation remains a cheap, no-chain reject.
   it('rejects non-numeric license_token_id', async () => {
     const config = loadTestConfig('test-developer');
     const result = await registerWorkTool.registerDerivative(config, {
       title: 'Should fail',
       content: 'Bad token ID',
       type: 'code',
-      parent_ip_id: fixtures['test-developer-code'].ipId,
+      parent_ip_id: registeredAssets['code'].ipId!,
       license_token_id: 'not-a-number',
+    });
+    assert.equal(result.success, false);
+    assert.ok(result.error?.includes('numeric'), `Expected "numeric" error, got: ${result.error}`);
+  });
+
+  it('rejects non-numeric parent_license_terms_id', async () => {
+    const config = loadTestConfig('test-developer');
+    const result = await registerWorkTool.registerDerivative(config, {
+      title: 'Should fail',
+      content: 'Bad terms ID',
+      type: 'code',
+      parent_ip_id: registeredAssets['code'].ipId!,
+      parent_license_terms_id: 'not-a-number',
     });
     assert.equal(result.success, false);
     assert.ok(result.error?.includes('numeric'), `Expected "numeric" error, got: ${result.error}`);

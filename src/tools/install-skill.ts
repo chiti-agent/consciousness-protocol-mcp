@@ -22,7 +22,10 @@ import type { Config } from '../config/store.js';
 import { searchTool } from './search.js';
 import { licenseTool } from './license.js';
 
-const SKILLS_DIR = join(homedir(), '.claude', 'skills');
+// CP_SKILLS_DIR redirects the allowed base for tests; path-traversal
+// validation still applies within whatever base is active. Read lazily so
+// tests can set the env var after module load.
+const skillsDir = () => process.env.CP_SKILLS_DIR ?? join(homedir(), '.claude', 'skills');
 
 interface InstallResult {
   success: boolean;
@@ -172,8 +175,8 @@ export const installSkillTool = {
     // 0. Quick check: already installed?
     const earlySlug = slugify(`skill-${ip_id.slice(2, 12)}`);
     const earlyPath = validateInstallPath(
-      params.install_path ?? join(SKILLS_DIR, earlySlug),
-      SKILLS_DIR,
+      params.install_path ?? join(skillsDir(), earlySlug),
+      skillsDir(),
     );
     if (existsSync(earlyPath)) {
       const hasSkillMd = existsSync(join(earlyPath, 'SKILL.md'));
@@ -267,8 +270,8 @@ export const installSkillTool = {
     // 4. Determine install path (validated against path traversal)
     const skillSlug = slugify(title);
     const installPath = validateInstallPath(
-      params.install_path ?? join(SKILLS_DIR, skillSlug),
-      SKILLS_DIR,
+      params.install_path ?? join(skillsDir(), skillSlug),
+      skillsDir(),
     );
 
     // Check if already installed
