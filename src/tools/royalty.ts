@@ -6,15 +6,16 @@ import type { Config } from '../config/store.js';
 import { loadKey, REGISTRATIONS_FILE } from '../config/store.js';
 import { cappedHttp } from '../config/fee-cap.js';
 import { postVolemEvent } from '../volem-events.js';
+import {
+  ROYALTY_MODULE,
+  readPolicyAccounting,
+} from '../royalty-policy.js';
 import { readFileSync, existsSync } from 'node:fs';
 
 /**
  * Contract addresses on Story Protocol (Aeneid testnet + mainnet).
  */
-const ROYALTY_MODULE = '0xD2f60c40fEbccf6311f8B47c4f2Ec6b040400086';
 const WIP_TOKEN = '0x1514000000000000000000000000000000000000';
-const ROYALTY_POLICY_LAP = '0xBe54FB168b3c982b7AaE60dB6CF75Bd8447b390E';
-const ROYALTY_POLICY_LRP = '0x9156e603C949481883B1d3355c6f1132D191fC41';
 
 const PIL = '0x2E896b0b2Fdb7457499B56AAaA4AE55BCB4Cd316';
 const LICENSE_REGISTRY = '0x529a750E02d8E2f15649c13D69a465286a780e24';
@@ -107,39 +108,6 @@ const WIP_ABI = [
     inputs: [{ name: 'account', type: 'address' }],
     name: 'balanceOf',
     outputs: [{ type: 'uint256' }],
-    stateMutability: 'view',
-    type: 'function',
-  },
-] as const;
-
-// Shared by RoyaltyPolicyLAP and RoyaltyPolicyLRP (IGraphAwareRoyaltyPolicy).
-// getPolicyRoyalty is declared non-view on LRP but reads fine via eth_call.
-const POLICY_ABI = [
-  {
-    inputs: [
-      { name: 'ipId', type: 'address' },
-      { name: 'ancestorIpId', type: 'address' },
-      { name: 'token', type: 'address' },
-    ],
-    name: 'getTransferredTokens',
-    outputs: [{ type: 'uint256' }],
-    stateMutability: 'view',
-    type: 'function',
-  },
-  {
-    inputs: [
-      { name: 'ipId', type: 'address' },
-      { name: 'ancestorIpId', type: 'address' },
-    ],
-    name: 'getPolicyRoyalty',
-    outputs: [{ type: 'uint32' }],
-    stateMutability: 'view',
-    type: 'function',
-  },
-  {
-    inputs: [{ name: 'ipId', type: 'address' }],
-    name: 'getPolicyRoyaltyStack',
-    outputs: [{ type: 'uint32' }],
     stateMutability: 'view',
     type: 'function',
   },
@@ -504,39 +472,20 @@ export const royaltyTool = {
           // and LRP both track transfers and percentages, but with different
           // math (LAP: flat share at any depth; LRP: decay + ancestor-stack
           // deduction). Read everything from the child's actual policy.
-          const childPolicy =
-            (await getRoyaltyPolicyForIp(publicClient, childIpId as `0x${string}`)) ??
-            (ROYALTY_POLICY_LAP as Address);
-          const isLrpChild = childPolicy.toLowerCase() === ROYALTY_POLICY_LRP.toLowerCase();
-
-          const [childRevenue, transferred, policyPct, stackPct] = await Promise.all([
-            publicClient.readContract({
-              address: ROYALTY_MODULE as Address,
-              abi: ROYALTY_MODULE_ABI,
-              functionName: 'totalRevenueTokensReceived',
-              args: [childIpId as Address, WIP_TOKEN as Address],
-            }) as Promise<bigint>,
-            publicClient.readContract({
-              address: childPolicy,
-              abi: POLICY_ABI,
-              functionName: 'getTransferredTokens',
-              args: [childIpId as Address, ipId, WIP_TOKEN as Address],
-            }) as Promise<bigint>,
-            publicClient.readContract({
-              address: childPolicy,
-              abi: POLICY_ABI,
-              functionName: 'getPolicyRoyalty',
-              args: [childIpId as Address, ipId],
-            }).then(Number) as Promise<number>,
-            isLrpChild
-              ? (publicClient.readContract({
-                  address: childPolicy,
-                  abi: POLICY_ABI,
-                  functionName: 'getPolicyRoyaltyStack',
-                  args: [ipId],
-                }).then(Number) as Promise<number>)
-              : Promise.resolve(0),
-          ]);
+          const childPolicy = await getRoyaltyPolicyForIp(publicClient, childIpId as Address);
+          if (!childPolicy) continue;
+          const {
+            accountedRevenue: childRevenue,
+            transferred,
+            policyPct,
+            stackPct,
+          } = await readPolicyAccounting(
+            publicClient,
+            childIpId as Address,
+            ipId,
+            WIP_TOKEN as Address,
+            childPolicy,
+          );
 
           const revenueSharePct = policyPct / 1_000_000;
           const { pending } = computePolicyPending(childRevenue, policyPct, stackPct, transferred);
@@ -790,43 +739,25 @@ export const royaltyTool = {
             descendantIds.map(async (id) => {
               const child = id as Address;
               try {
-                const revenue = await publicClient.readContract({
-                  address: ROYALTY_MODULE as Address,
-                  abi: ROYALTY_MODULE_ABI,
-                  functionName: 'totalRevenueTokensReceived',
-                  args: [child, WIP_TOKEN as Address],
-                }) as bigint;
-
-                if (revenue <= BigInt(0)) return null;
-
                 // Pair each child with its actual on-chain royalty policy, not a
                 // hardcoded LAP: a mismatched policy makes claimAllRevenue revert
                 // atomically, dropping the ancestor's own claim too.
-                const policy = (await getRoyaltyPolicyForIp(publicClient, child)) ?? (ROYALTY_POLICY_LAP as Address);
-                const isLrpChild = policy.toLowerCase() === ROYALTY_POLICY_LRP.toLowerCase();
+                const policy = await getRoyaltyPolicyForIp(publicClient, child);
+                if (!policy) throw new Error('No on-chain royalty policy found for child');
+                const {
+                  accountedRevenue: revenue,
+                  transferred,
+                  policyPct,
+                  stackPct,
+                } = await readPolicyAccounting(
+                  publicClient,
+                  child,
+                  ip,
+                  WIP_TOKEN as Address,
+                  policy,
+                );
 
-                const [transferred, policyPct, stackPct] = await Promise.all([
-                  publicClient.readContract({
-                    address: policy,
-                    abi: POLICY_ABI,
-                    functionName: 'getTransferredTokens',
-                    args: [child, ip, WIP_TOKEN as Address],
-                  }) as Promise<bigint>,
-                  publicClient.readContract({
-                    address: policy,
-                    abi: POLICY_ABI,
-                    functionName: 'getPolicyRoyalty',
-                    args: [child, ip],
-                  }).then(Number) as Promise<number>,
-                  isLrpChild
-                    ? (publicClient.readContract({
-                        address: policy,
-                        abi: POLICY_ABI,
-                        functionName: 'getPolicyRoyaltyStack',
-                        args: [ip],
-                      }).then(Number) as Promise<number>)
-                    : Promise.resolve(0),
-                ]);
+                if (revenue <= BigInt(0)) return null;
 
                 const { pending } = computePolicyPending(revenue, policyPct, stackPct, transferred);
                 if (pending <= BigInt(0)) return null;
