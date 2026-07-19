@@ -14,8 +14,8 @@ const AENEID_RPC = 'https://aeneid.storyrpc.io';
 const AENEID_CHAIN_ID = 1315;
 const FAUCET_URL = 'https://faucet.story.foundation/api/faucet';
 
-const MIN_BALANCE = parseEther('0.1'); // Minimum needed per wallet
-const FUND_AMOUNT = parseEther('0.3'); // Amount to send per wallet (enough for minting fees)
+const MIN_BALANCE = parseEther(process.env.FUND_MIN ?? '0.1'); // Minimum needed per wallet
+const FUND_AMOUNT = parseEther(process.env.FUND_AMOUNT ?? '0.3'); // Amount to send per wallet (enough for minting fees)
 
 const storyAeneid = {
   id: AENEID_CHAIN_ID,
@@ -120,10 +120,16 @@ async function main(): Promise<void> {
 
   const wallets = generateWallets();
 
-  // Main wallet key from environment or config
-  const mainKey = process.env.MAIN_WALLET_KEY;
+  // Main wallet key: env override, otherwise the configured evm key
+  let mainKey = process.env.MAIN_WALLET_KEY;
   if (!mainKey) {
-    console.log('NOTE: MAIN_WALLET_KEY not set. Faucet-only mode (no fallback transfers).');
+    try {
+      const { loadKey } = await import('../../src/config/store.js');
+      mainKey = loadKey('evm');
+      console.log('Using configured evm key as funding source.');
+    } catch {
+      console.log('NOTE: no MAIN_WALLET_KEY and no configured evm key. Faucet-only mode.');
+    }
     console.log();
   }
 

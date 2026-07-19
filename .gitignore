@@ -13,3 +13,4 @@ package-lock.json
 
 # Agent task diaries (local, never committed)
 .tasks/
+graphify-out/
