@@ -17,6 +17,7 @@ import { loadTestConfig, activateTestWallet, restoreOriginalWallet } from '../he
 import { registerWorkTool } from '../../src/tools/register-work.js';
 import { licenseTool } from '../../src/tools/license.js';
 import { contentTool } from '../../src/tools/content.js';
+import { fetchIpfs } from '../../src/ipfs.js';
 
 const STATE_FILE = join(import.meta.dirname, 'state-gated.json');
 const state: Record<string, any> = existsSync(STATE_FILE) ? JSON.parse(readFileSync(STATE_FILE, 'utf-8')) : {};
@@ -96,10 +97,10 @@ const volem = process.env.VOLEM_URL ?? 'http://localhost:3010';
 const pub = await (await fetch(`${volem}/api/ip/${IP}`)).json() as any;
 if (JSON.stringify(pub).includes('contentKey')) throw new Error('contentKey утёк в публичный API!');
 const rawUrl: string = pub.mediaUrl ?? pub.asset?.mediaUrl;
-const gatewayUrl = rawUrl.startsWith('ipfs://')
-  ? 'https://gateway.pinata.cloud/ipfs/' + rawUrl.slice('ipfs://'.length)
-  : rawUrl;
-const blobRaw = await (await fetch(gatewayUrl)).arrayBuffer();
+const { response: blobResponse } = await fetchIpfs(rawUrl, {
+  preferredGateway: loadTestConfig('test-poet').ipfs.gateway,
+});
+const blobRaw = await blobResponse.arrayBuffer();
 const blobText = Buffer.from(blobRaw).toString('utf-8');
 if (blobText.includes('СКРЫТЫЙ НАВЫК')) throw new Error('IPFS-блоб содержит открытый текст!');
 console.log(`   OK: blob ${blobRaw.byteLength}B — шифротекст; contentAccess=${pub.contentAccess ?? pub.asset?.contentAccess}`);
