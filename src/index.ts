@@ -201,6 +201,8 @@ server.tool(
     ip_id: z.string().regex(/^0x[a-fA-F0-9]{40}$/, 'Must be a valid Ethereum address').describe('IP Asset ID to license (0x...)'),
     license_terms_id: z.string().describe('License terms ID'),
     amount: z.number().default(1).describe('Number of license tokens to mint'),
+    receiver: z.string().regex(/^0x[a-fA-F0-9]{40}$/, 'Must be a valid Ethereum address').optional().describe('Address that receives the license tokens (default: this wallet)'),
+    max_minting_fee: z.string().regex(/^\d+(?:\.\d{1,18})?$/, 'Must be a non-negative WIP amount with at most 18 decimals').optional().describe('Maximum total WIP to pay for the whole mint batch; omit to lock the current on-chain quote, use 0 for free-only'),
   },
   async (params) => {
     if (!config) return { content: [{ type: 'text' as const, text: 'Not configured. Run setup first.' }] };
@@ -209,7 +211,6 @@ server.tool(
     return { content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }] };
   },
 );
-
 server.tool(
   'get_content',
   'Fetch an asset\'s content. Public content is returned directly; license-gated content is decrypted automatically when this wallet is authorized (owner, license-token holder, or derivative owner) — otherwise mint_license first. Verifies the plaintext against the registered contentHash (provenance). Text is returned inline, binaries are saved to a file.',
