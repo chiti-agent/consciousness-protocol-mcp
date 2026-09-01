@@ -1,5 +1,22 @@
 # Design: P6 client signer and agent tools
 
+> **STATUS 2026-09-01: THIRD REVISION after the gate.** Five blockers, all confirmed by reading the
+> code rather than the note. Two were my errors of reading rather than of design, and both have the
+> same shape: I read the part addressed to me and not the whole.
+>
+> **`resume` is not a read.** `contribution-acceptance-application-service.ts:214` calls
+> `prepareContributionAcceptanceMetadata` whenever the attempt is `PREPARING` — pinning to IPFS and
+> writing to the database. All ten acceptance tools sign; the read/write split I drew is wrong.
+>
+> **The gate said the hosted decision was already taken. Checked: it refers to a different server.**
+> The parent's line 17 governs `volem-mcp`, which `README.md:11` states lives in the Volem app and
+> exposes only DB-backed reads. **This** package is the client/self-custody MCP and owns the full
+> read/write toolset by design. So the parent does not settle it, and it remains a decision —
+> though a much better informed one, see below.
+>
+> The other three blockers are real gaps: no durable journal for a hash produced before a crash, an
+> idempotency key that does not survive a restart, and a V1 deadline with no publication mechanism.
+>
 > **STATUS 2026-09-01: SECOND REVISION.** The pre-gate review found this design's central premise
 > false, and finding it uncovered a live defect. I verified that a hosted/stdio boundary *exists*
 > and wrote the design on top of it; I did not check **what it gates**. It gates one tool. Roughly
@@ -61,14 +78,28 @@ A repo-wide search for a second gate — `readOnly`, `isHosted`, an allow-list �
 ownership check and the content-key column read, and it has the same shape as both: a rule written
 correctly in a comment and applied in one place.
 
-⚠️ **It is also a human decision, because closing it changes the hosted surface.** Putting these
-eight behind the gate is the only thing consistent with the comment's own reasoning, and it removes
-capability from whatever calls the hosted server today. The alternative — leave them exposed and
-gate only the new tools — means this delivery ships a boundary it contradicts on its first line.
-I recommend closing it; I am not deciding it.
+**It is still a decision, and the gate was wrong that it is not.** The parent's read-only constraint
+names `volem-mcp`, a separate server inside the Volem app (`README.md:11`); this package is
+deliberately the full read/write client. Nothing in the parent governs this repository's HTTP mode.
 
-Until it is decided, the acceptance criterion below is written against the new tools only, and the
-existing eight are named as a carried risk rather than silently included.
+**But the facts that decide it are now on the table, and they are worse than the last revision knew.**
+`docs/deploy-runbook.md:80-81` lists `CP_NEAR_PRIVATE_KEY` and `CP_EVM_PRIVATE_KEY` as **required**
+for the hosted Railway deployment. The server therefore holds both keys, and the eight unconditional
+tools sign with them. A caller holding the deployment's bearer token can make the host register
+works, mint licences, pay royalties, claim revenue and fetch gated content, spending the host's NEAR
+and Story funds.
+
+The blast radius is bounded by that bearer token rather than open to the internet, which is why this
+is a decision on a deployed system and not an incident. **My recommendation is unchanged and now
+stronger: gate the whole signing surface.** The runbook's own P4 section gated `install_skill` for
+precisely this reason — "может авто-минтить лицензию с host-кошелька… опасно" — and stopped at one
+tool.
+
+**And the gate must cover the whole surface, not only Volem writes.** The rule is about what a
+remote caller can make the *host* do, so it covers signing keys, filesystem writes, and chain
+writes to NEAR and Story as well as posts to Volem. Enumerating only the Volem writers, as the
+table above does, understates it: a tool that spends host funds on Story is exposed by the same
+gap even though Volem never hears about it.
 
 ## The signature is one implementation with shared vectors
 
@@ -82,31 +113,82 @@ is the failure mode, and prose has not caught it in four rounds.
   expected signatures lives in `tests/fixtures/`, and the identical file is committed in Volem. S8
   runs both against the same vectors with real keys. A divergence fails the release, not a review.
 - Vectors cover at minimum: each of the three migrated routes, an empty body, a body with non-ASCII
-  content, path with and without query, and a nonce at the boundary of its range.
+  content, and a nonce at the boundary of its range.
+- **Query strings get their own vectors and their own rule**, because "path with and without query"
+  was too loose to test: no query at all, an empty query (`?`), one parameter, repeated keys, keys
+  out of lexical order, and percent-encoded reserved characters. The canonical form must state
+  whether the query is included, whether keys are sorted, and how repeats order — three choices the
+  earlier wording left to whoever wrote the code first, on each side independently.
 
 **V1 stays only as an explicit fallback, bounded by the server's announced deadline.** Not a silent
 retry-on-failure: falling back automatically when EVM2 is rejected is how a broken EVM2
 implementation ships unnoticed and how the replay window stays open. The fallback is configuration
-the operator sets, it logs every use, and the deadline comes from the server rather than from here.
+the operator sets, and it logs every use.
+
+⚠️ **The deadline needs somewhere to come from, and today there is nowhere.** The previous revision
+said it "comes from the server" and named no mechanism; the server publishes no such value. Without
+one, "bounded by the deadline" is a sentence the code cannot execute, and the fallback is bounded by
+nothing.
+
+**This is a dependency on the Volem side, and it belongs in the parent phase.** The server must
+publish its per-route V1 retirement dates on an unauthenticated endpoint, so a client can refuse V1
+past the date without being told by a human. Until that exists here, the fallback is bounded by
+explicit operator configuration with **no default** — the operator states a date or gets no
+fallback — and the client logs that it is running on a locally-asserted deadline rather than a
+published one. That is weaker and it is honest; a silent unbounded fallback is neither.
 
 ## What is added, and where it may run
 
 **Read tools stay available everywhere.** Public thread list and detail need no wallet and no
-signature, and they run on hosted HTTP as they do on stdio.
+signature, and they run on hosted HTTP as they do on stdio. That is the entire set: **all ten
+acceptance tools sign**, including `resume`, and none of them is hosted-available.
 
 **Every tool that signs is local-only**, behind the gate this delivery builds:
 
 - thread create and reply
-- eight of the ten contribution-acceptance tools
+- **all ten** contribution-acceptance tools
 
 The rule is the one already written in `index.ts:44`: on hosted HTTP the wallet is the *server's*,
 so a remote caller triggering a signature spends someone else's money.
 
-**`resume` and `load` do not sign, and the signing rationale does not cover them.** They are gated
-for a different and weaker reason: an in-flight attempt carries the host's reserved nonce, its lease
-and its prepared calldata, and that is host-local operational state rather than public data. Naming
-the weaker reason separately is the point — a gate justified by an argument that does not apply to
-its contents is a gate someone will later remove for the right-sounding reason.
+⚠️ **The previous revision said `resume` and `load` only read, and gated them on a weaker
+argument.** That was wrong about `resume`:
+`contribution-acceptance-application-service.ts:214` pins metadata and writes when the attempt is
+`PREPARING`. It signs like the rest and is gated for the same reason as the rest. `load` does read,
+and is gated because an in-flight attempt carries the host's reserved nonce and prepared calldata —
+host-local operational state. The weaker reason is stated separately for the one tool it applies to,
+because a gate justified by an argument that does not fit its contents is one someone later removes
+for a right-sounding reason.
+
+## A local journal, because a tool cannot record a hash it never wrote down
+
+The previous revision said `record` is how a hash gets home after a crash. That is wrong in the
+case it names: **a process that dies between broadcast and record never persisted the hash at all**,
+so there is nothing for `record` to send. The separate tool answers the case where the *caller*
+lost the response, not where this process died holding the only copy.
+
+**A durable local journal, written before the wallet is asked to broadcast.** One append-only file
+under the client's own state directory, one record per attempt:
+
+| Written | When |
+|---|---|
+| attempt id, action, **idempotency key**, canonical request bytes, reserved nonce | before broadcast |
+| transaction hash | as soon as the wallet returns one, before anything else |
+| terminal outcome | when the server confirms |
+
+Two things follow, and they are blockers three and four:
+
+- **The hash survives the crash**, because it is written the moment it exists rather than after the
+  round trip that may not happen.
+- **The idempotency key survives the restart.** A key generated per process is a new key after a
+  crash, and a fresh key on the same intent is precisely how one intent becomes two effects. The key
+  is generated once, journalled with the request, and reused on every retry of that attempt.
+
+On start, the client reads the journal, and any record with a hash and no terminal outcome is
+offered for `record`. That is what makes crash recovery a path rather than an aspiration.
+
+⚠️ The journal holds a nonce and request bytes, not a key. It is host-local state and one more
+reason none of these tools may run on hosted HTTP.
 
 ## Acceptance is orchestrated, and the crash path stays separate
 
@@ -163,6 +245,14 @@ profile's over-700-lines row, and it is a precondition of the delivery rather th
 - `resume` and `load` on an in-flight attempt return state and start nothing.
 - `src/index.ts` is shorter than 700 lines.
 - `yarn test`, `yarn typecheck`, `yarn build` pass.
+
+## Follow-up outside this delivery
+
+**`docs/deploy-runbook.md` section P4 is stale and should say so.** It presents gating
+`install_skill` as the hosted-safety measure, with a rationale that applies equally to eight tools it
+does not mention. Leaving it as written is how the next person concludes the surface is handled.
+Correcting it is a documentation change, not part of this delivery's code, and it should not wait
+for this delivery either way.
 
 ## Risks
 
