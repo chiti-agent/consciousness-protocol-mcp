@@ -1,5 +1,29 @@
 # Design: P6 client signer and agent tools
 
+> **STATUS 2026-09-01: FOURTH REVISION after the second gate.** Six blockers. One of them is the
+> third occurrence today of a single failure — **I fold in corrections and leave the older text that
+> contradicts them standing** — so this revision sweeps the whole document rather than patching
+> sites, and the sweep is listed at the end of this header.
+>
+> **The query rule was invented for a field that does not exist.** The parent's signature table
+> (`2026-08-27-p6-reputation-and-agents.md:243-249`) carries `method` and `path` and **no query**.
+> A canonicalization rule for query strings is therefore unverifiable by design: nothing on the other
+> side reads it. Corrected below into the rule that actually follows — the query is not signed, so a
+> signed route may not take meaningful input through it.
+>
+> **The journal closed a wider window than the one that exists.** A crash after the RPC accepted the
+> transaction but before the hash reached disk still loses it, because acceptance and persistence are
+> two steps and the gap between them is not zero.
+>
+> **The journal covered acceptance only.** Registration, event reporting and content-key requests are
+> mutations with the same retry problem and were left out.
+>
+> **The V1 deadline was assigned to no stage.** Calling it "a parent-side dependency" named a
+> repository, not an owner, and a dependency with no stage is a dependency nobody delivers.
+>
+> Sweep performed: acceptance criteria scoped to "the new tools" removed, since all ten sign; the
+> hosted allow-list is now enumerated by name rather than described.
+>
 > **STATUS 2026-09-01: THIRD REVISION after the gate.** Five blockers, all confirmed by reading the
 > code rather than the note. Two were my errors of reading rather than of design, and both have the
 > same shape: I read the part addressed to me and not the whole.
@@ -114,11 +138,18 @@ is the failure mode, and prose has not caught it in four rounds.
   runs both against the same vectors with real keys. A divergence fails the release, not a review.
 - Vectors cover at minimum: each of the three migrated routes, an empty body, a body with non-ASCII
   content, and a nonce at the boundary of its range.
-- **Query strings get their own vectors and their own rule**, because "path with and without query"
-  was too loose to test: no query at all, an empty query (`?`), one parameter, repeated keys, keys
-  out of lexical order, and percent-encoded reserved characters. The canonical form must state
-  whether the query is included, whether keys are sorted, and how repeats order — three choices the
-  earlier wording left to whoever wrote the code first, on each side independently.
+
+⚠️ **The query is not signed, and that is a constraint on routes rather than a gap in the scheme.**
+The parent's field table is `domain, chainId, address, method, path, bodySha256, issuedAt,
+expiresAt, nonce, action, idempotencyKey` — no query. So:
+
+- **No signed route may take meaningful input through the query string.** Everything that matters
+  goes in the body, which is hashed. A signed route reading a query parameter is a defect, because
+  that parameter is outside the signature and anyone in the path can change it.
+- One vector proves it rather than asserting it: **the same request with a different query produces
+  the same signature.** That test failing means someone added a query field on one side only.
+- If a route genuinely needs a query parameter under signature, the field table changes and that is
+  a parent-side change, not a local one.
 
 **V1 stays only as an explicit fallback, bounded by the server's announced deadline.** Not a silent
 retry-on-failure: falling back automatically when EVM2 is rejected is how a broken EVM2
@@ -130,9 +161,15 @@ said it "comes from the server" and named no mechanism; the server publishes no 
 one, "bounded by the deadline" is a sentence the code cannot execute, and the fallback is bounded by
 nothing.
 
-**This is a dependency on the Volem side, and it belongs in the parent phase.** The server must
-publish its per-route V1 retirement dates on an unauthenticated endpoint, so a client can refuse V1
-past the date without being told by a human. Until that exists here, the fallback is bounded by
+**This is a dependency with an owner and a stage, not just a repository.** Naming "the Volem side"
+named a place and no one; a dependency assigned to no stage is one nobody delivers.
+
+**Owner: Volem, stage S3** — the same stage that migrates the three routes to EVM2, because the
+route that starts refusing V1 is the route that must announce when it will. It publishes per-route
+V1 retirement dates on an **unauthenticated** endpoint, so a client can refuse V1 past the date
+without a human relaying it. **S7 consumes it; S8 verifies both sides against the same dates.**
+If S3 ships without it, this delivery falls back to the operator-configured path below and says so
+in its own note rather than discovering it at S8. Until that exists here, the fallback is bounded by
 explicit operator configuration with **no default** — the operator states a date or gets no
 fallback — and the client logs that it is running on a locally-asserted deadline rather than a
 published one. That is weaker and it is honest; a silent unbounded fallback is neither.
@@ -172,9 +209,17 @@ under the client's own state directory, one record per attempt:
 
 | Written | When |
 |---|---|
-| attempt id, action, **idempotency key**, canonical request bytes, reserved nonce | before broadcast |
-| transaction hash | as soon as the wallet returns one, before anything else |
+| attempt id, action, **idempotency key**, canonical request bytes, reserved nonce | before the request is signed |
+| **intent-to-broadcast**, with the sender and nonce | immediately before the RPC call |
+| transaction hash | as soon as the RPC returns one, before anything else |
 | terminal outcome | when the server confirms |
+
+⚠️ **The intent row exists because acceptance and persistence are two steps.** A crash after the RPC
+accepted the transaction and before the hash reached disk leaves no hash — the previous revision's
+journal did not close that, it only made it smaller. The intent row does not recover the hash; it
+records that **a transaction may exist at this sender and nonce**, which is enough to find it: the
+recovery path reconciles by identity, exactly as Volem's own reconciler does, rather than by a hash
+nobody has.
 
 Two things follow, and they are blockers three and four:
 
@@ -184,8 +229,18 @@ Two things follow, and they are blockers three and four:
   crash, and a fresh key on the same intent is precisely how one intent becomes two effects. The key
   is generated once, journalled with the request, and reused on every retry of that attempt.
 
-On start, the client reads the journal, and any record with a hash and no terminal outcome is
-offered for `record`. That is what makes crash recovery a path rather than an aspiration.
+On start, the client reads the journal:
+
+- a record with a hash and no terminal outcome is offered for `record`;
+- **a record with an intent and no hash is offered for reconciliation by sender and nonce**, which is
+  the case the hash cannot answer.
+
+That is what makes crash recovery a path rather than an aspiration.
+
+**The journal covers every mutation, not only acceptance.** Registration, event reporting and the
+content-key request are retried by the same callers under the same crashes, and an idempotency key
+that survives a restart is worth exactly as much to them. One journal, one record shape, every
+signed mutation — a second mechanism for the other three is how they drift.
 
 ⚠️ The journal holds a nonce and request bytes, not a key. It is host-local state and one more
 reason none of these tools may run on hosted HTTP.
@@ -238,9 +293,20 @@ profile's over-700-lines row, and it is a precondition of the delivery rather th
   proves the canonicalizer is right; it does not prove anything calls it. Checked at the request
   level, not at the module level.
 - **A V1 fallback invocation is logged, and is refused once the announced deadline has passed.**
-- `stdio` tool enumeration includes the new read and write tools; **hosted HTTP enumeration includes
-  the new read tools and none of the new tools that sign.** Scoped to the new tools until the
-  decision above is taken about the existing eight.
+- `stdio` enumeration includes every tool. **Hosted HTTP enumeration matches an explicit allow-list
+  and nothing else**, and the allow-list is enumerated by name rather than described:
+
+  `search_works`, `get_asset`, `get_agent`, `get_revenue`, `get_revenue_all`,
+  `verify_provenance`, plus the two new public thread tools `list_threads` and `get_thread`.
+
+  Everything not on that list is absent from hosted enumeration — including the eight that sign
+  today. The test asserts the **exact set**, not a subset, because a subset test passes while a new
+  signing tool leaks in.
+
+  ⚠️ **This list is the design's recommendation and the open decision above owns it.** If the human
+  keeps the eight exposed, this criterion changes with that answer and the list grows by those eight
+  — it does not quietly stand as written. Stated here rather than left implicit, because an
+  acceptance criterion that pre-empts an open decision is how the decision gets made by nobody.
 - A dropped response after broadcast is recovered by `record` alone, with no second prepare.
 - `resume` and `load` on an in-flight attempt return state and start nothing.
 - `src/index.ts` is shorter than 700 lines.
