@@ -11,10 +11,10 @@ import { writeFileSync, mkdirSync } from 'node:fs';
 import { join, extname, dirname } from 'node:path';
 import { homedir } from 'node:os';
 import type { Config } from '../config/store.js';
-import { loadKey } from '../config/store.js';
 import { decryptContent } from '../content-crypto.js';
 import { fetchIpfs } from '../ipfs.js';
 import { getCommittedContentHash, readStoryIpMetadata, type StoryIpMetadata } from '../story-metadata.js';
+import { signedVolemRequest } from '../volem/client.js';
 
 const DOWNLOADS_DIR = join(homedir(), '.consciousness-protocol', 'downloads');
 
@@ -28,16 +28,18 @@ type VolemAsset = {
   encryptedMediaType?: string | null;
 };
 
-async function volemAuthHeader(): Promise<string> {
-  const { privateKeyToAccount } = await import('viem/accounts');
-  const account = privateKeyToAccount(loadKey('evm') as `0x${string}`);
-  const timestamp = String(Date.now());
-  const signature = await account.signMessage({ message: `volem:${timestamp}` });
-  return `EVM ${account.address}:${timestamp}:${signature}`;
-}
-
 const isTextMime = (mime: string | null | undefined): boolean =>
   !!mime && (mime.startsWith('text/') || mime === 'application/json');
+
+export const requestVolemContentKey = async (config: Config, ipId: string): Promise<Response> => {
+  const { response } = await signedVolemRequest({
+    config,
+    action: 'ip.content-key',
+    path: `/api/ip/${ipId}/content-key`,
+    timeoutMs: 15_000,
+  });
+  return response;
+};
 
 export function assertVolemMatchesStory(
   asset: Pick<VolemAsset, 'mediaUrl' | 'contentHash'>,
@@ -78,11 +80,7 @@ export const contentTool = {
       let effectiveMime = metadata.mediaType ?? asset.ipType ?? null;
 
       if (gated) {
-        const keyRes = await fetch(`${baseUrl}/api/ip/${params.ip_id}/content-key`, {
-          method: 'POST',
-          headers: { 'Authorization': await volemAuthHeader() },
-          signal: AbortSignal.timeout(15_000),
-        });
+        const keyRes = await requestVolemContentKey(config, params.ip_id);
         if (keyRes.status === 403) {
           return {
             success: false,

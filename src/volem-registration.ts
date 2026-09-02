@@ -1,7 +1,7 @@
 /** Volem registration writes shared by original and derivative registration. */
 
 import type { Config } from './config/store.js';
-import { loadKey } from './config/store.js';
+import { jsonRequestBody, signedVolemRequest } from './volem/client.js';
 
 export type VolemWriteResult =
   | { ok: true }
@@ -15,21 +15,12 @@ export async function postToVolem(
   config: Config,
   data: Record<string, unknown>,
 ): Promise<VolemWriteResult> {
-  const baseUrl = config.volemApiUrl ?? 'http://localhost:3010';
   try {
-    const { privateKeyToAccount } = await import('viem/accounts');
-    const account = privateKeyToAccount(loadKey('evm') as `0x${string}`);
-    const timestamp = String(Date.now());
-    const signature = await account.signMessage({ message: `volem:${timestamp}` });
-
-    const response = await fetch(`${baseUrl}/api/ip/register`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `EVM ${account.address}:${timestamp}:${signature}`,
-      },
-      body: JSON.stringify(data),
-      signal: AbortSignal.timeout(10_000),
+    const { response } = await signedVolemRequest({
+      config,
+      action: 'ip.register',
+      path: '/api/ip/register',
+      body: jsonRequestBody(data),
     });
     if (response.ok) return { ok: true };
 

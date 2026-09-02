@@ -6,7 +6,7 @@
  */
 
 import type { Config } from './config/store.js';
-import { loadKey } from './config/store.js';
+import { jsonRequestBody, signedVolemRequest } from './volem/client.js';
 
 export type VolemEventType = 'LICENSE_ADDED' | 'LICENSE_MINTED' | 'ROYALTY_CLAIMED' | 'ROYALTY_PAID';
 
@@ -24,24 +24,13 @@ const TX_HASH_RE = /^0x[0-9a-fA-F]{64}$/;
 export async function postVolemEvent(config: Config, event: VolemEvent): Promise<void> {
   if (config.backend && config.backend !== 'volem') return;
 
-  const baseUrl = config.volemApiUrl ?? 'http://localhost:3010';
   try {
-    const { privateKeyToAccount } = await import('viem/accounts');
-    const pk = loadKey('evm');
-    const account = privateKeyToAccount(pk as `0x${string}`);
-
-    const timestamp = String(Date.now());
-    const signature = await account.signMessage({ message: `volem:${timestamp}` });
-
     const txHash = event.tx_hash && TX_HASH_RE.test(event.tx_hash) ? event.tx_hash : undefined;
-
-    const res = await fetch(`${baseUrl}/api/ip/event`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `EVM ${account.address}:${timestamp}:${signature}`,
-      },
-      body: JSON.stringify({
+    const { response: res } = await signedVolemRequest({
+      config,
+      action: 'ip.event',
+      path: '/api/ip/event',
+      body: jsonRequestBody({
         ipId: event.ip_id,
         eventType: event.event_type,
         licenseTermsId: event.license_terms_id,
@@ -49,7 +38,6 @@ export async function postVolemEvent(config: Config, event: VolemEvent): Promise
         txHash,
         metadata: event.metadata,
       }),
-      signal: AbortSignal.timeout(10_000),
     });
     if (!res.ok) {
       console.error(`Volem event failed: ${res.status} ${await res.text()}`);
