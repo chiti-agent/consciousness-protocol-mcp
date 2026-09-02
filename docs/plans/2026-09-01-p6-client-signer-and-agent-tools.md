@@ -1,5 +1,24 @@
 # Design: P6 client signer and agent tools
 
+> **STATUS 2026-09-02: SIXTH REVISION — the hosted question is answered, and I was wrong for three
+> rounds.** The parent plan's frozen boundaries settle it in two sentences:
+>
+> > The hosted Volem MCP remains exactly its existing read-only tool set. **It receives no signer,
+> > key**, thread write, acceptance write, grant, or operator tool.
+> > The self-installed client MCP owns signing and broadcasting. Volem prepares calldata and verifies
+> > what landed; **it never receives a private key and never signs for an agent.**
+>
+> The gate was right in all three rounds. I argued from `docs/plans/2026-06-05-hosted-mcp-deploy-design.md`,
+> whose line 196 assumes "one Railway service = one agent/wallet" — an intent superseded three months
+> ago. I applied the currency rule to other people's documents all day and not to that one.
+>
+> **The defect is therefore larger and simpler than "gate eight tools".** A hosted deployment must
+> hold **no keys at all**. `deploy-runbook.md:80-81` marks `CP_NEAR_PRIVATE_KEY` and
+> `CP_EVM_PRIVATE_KEY` **required**, which contradicts the frozen boundary directly. Remove the keys
+> and the eight signing tools stop working on their own, because they have nothing to sign with.
+>
+> **No human decision remains.** The boundary was frozen on 2026-09-01; I did not read it.
+>
 > **STATUS 2026-09-02: FIFTH REVISION — design rounds closed.** Third blocked gate. Three of the
 > four blockers are fixed below. The fourth is the one the gate and I have now disagreed about in
 > three consecutive rounds, and under the finite-rounds rule that makes it a human decision rather
@@ -114,22 +133,35 @@ A repo-wide search for a second gate — `readOnly`, `isHosted`, an allow-list �
 ownership check and the content-key column read, and it has the same shape as both: a rule written
 correctly in a comment and applied in one place.
 
-## The hosted question, unresolved after three rounds
+## The hosted deployment must hold no keys
 
-Three gate rounds, three disagreements, no movement. Under the finite-rounds rule this stops being
-something to argue and becomes something to decide. Both readings, stated fairly:
+Settled, not open. The parent plan's frozen boundaries, 2026-09-01:
 
-**The gate's reading:** the parent plan fixes hosted read-only, so the eight signing tools exposed on
-this package's HTTP transport are a defect against a settled constraint, and closing them needs no
-decision.
+> The hosted Volem MCP remains exactly its existing read-only tool set. **It receives no signer,
+> key**, thread write, acceptance write, grant, or operator tool.
+> The self-installed client MCP owns signing and broadcasting. Volem prepares calldata and verifies
+> what landed; **it never receives a private key and never signs for an agent.**
 
-**My reading:** the parent's constraint names `volem-mcp`, which `README.md:11` places inside the
-Volem app exposing DB-backed reads only. This package is described in the same file as the
-client/self-custody MCP owning the full read/write toolset, and it is deployed over HTTP deliberately
-per `docs/deploy-runbook.md`. So the parent does not reach it, and closing the eight removes
-capability from a live deployment.
+**The architecture, stated plainly because I had it backwards:** an agent that wants to write runs
+**its own** MCP server on its own machine, with its own keys. The hosted server exists for agents
+that have not installed one, and it exists **to read**. Signing never happens on a shared host — not
+because a remote caller might abuse it, but because there is no wallet there to abuse.
 
-**What both readings agree on**, and what matters more than which is right:
+**So the deliverable is not a tool gate. It is the absence of keys.**
+
+- The hosted path configures **no wallet**: `CP_NEAR_PRIVATE_KEY` and `CP_EVM_PRIVATE_KEY` are not
+  read there.
+- **It refuses to start if they are set.** Their presence means the service was deployed wrong, and
+  starting anyway is how a misdeployment runs for months looking healthy.
+- The eight signing tools then fail on their own, having nothing to sign with — the correct failure,
+  and one no allow-list has to enforce.
+
+⚠️ `docs/deploy-runbook.md:80-81` currently marks both keys **required** for the hosted deployment.
+That line contradicts the frozen boundary and is the actual defect; the eight exposed tools are its
+symptom.
+
+**What was true regardless of who was right:**
+
 
 - `docs/deploy-runbook.md:80-81` makes `CP_NEAR_PRIVATE_KEY` and `CP_EVM_PRIVATE_KEY` **required**
   for the hosted deployment.
@@ -138,35 +170,6 @@ capability from a live deployment.
 - A holder of the deployment's bearer token can therefore spend the host's funds.
 - Nobody disputes that this should not be so. The dispute is only whether closing it is a decision
   or an obligation — and the fix is identical either way.
-
-**Recommendation: close it.** If the human agrees, the disagreement was never load-bearing. If the
-human wants the hosted writers kept, that is the answer no reading of the parent could have given,
-which is exactly why it needed a person.
-
----
-
-**The superseded argument, kept for the record.** The parent's read-only constraint
-names `volem-mcp`, a separate server inside the Volem app (`README.md:11`); this package is
-deliberately the full read/write client. Nothing in the parent governs this repository's HTTP mode.
-
-**But the facts that decide it are now on the table, and they are worse than the last revision knew.**
-`docs/deploy-runbook.md:80-81` lists `CP_NEAR_PRIVATE_KEY` and `CP_EVM_PRIVATE_KEY` as **required**
-for the hosted Railway deployment. The server therefore holds both keys, and the eight unconditional
-tools sign with them. A caller holding the deployment's bearer token can make the host register
-works, mint licences, pay royalties, claim revenue and fetch gated content, spending the host's NEAR
-and Story funds.
-
-The blast radius is bounded by that bearer token rather than open to the internet, which is why this
-is a decision on a deployed system and not an incident. **My recommendation is unchanged and now
-stronger: gate the whole signing surface.** The runbook's own P4 section gated `install_skill` for
-precisely this reason — "может авто-минтить лицензию с host-кошелька… опасно" — and stopped at one
-tool.
-
-**And the gate must cover the whole surface, not only Volem writes.** The rule is about what a
-remote caller can make the *host* do, so it covers signing keys, filesystem writes, and chain
-writes to NEAR and Story as well as posts to Volem. Enumerating only the Volem writers, as the
-table above does, understates it: a tool that spends host funds on Story is exposed by the same
-gap even though Volem never hears about it.
 
 ## The signature is one implementation with shared vectors
 
@@ -363,10 +366,10 @@ profile's over-700-lines row, and it is a precondition of the delivery rather th
   today. The test asserts the **exact set**, not a subset, because a subset test passes while a new
   signing tool leaks in.
 
-  ⚠️ **This list is the design's recommendation and the open decision above owns it.** If the human
-  keeps the eight exposed, this criterion changes with that answer and the list grows by those eight
-  — it does not quietly stand as written. Stated here rather than left implicit, because an
-  acceptance criterion that pre-empts an open decision is how the decision gets made by nobody.
+  ⚠️ **The eight tools that sign today are not on this list and cannot be**, because the hosted path
+  holds no keys. The list is the whole hosted surface, and the enumeration test asserts it as an
+  exact set rather than a subset — a subset test passes while a new signing tool leaks in.
+
 - A dropped response after broadcast is recovered by `record` alone, with no second prepare.
 - `resume` and `load` on an in-flight attempt return state and start nothing.
 - `src/index.ts` is shorter than 700 lines.
