@@ -27,6 +27,7 @@ export type ActiveHttpRequest = HttpRequestStarted & { signatureNonce: `0x${stri
 export type BroadcastIntent = {
   type: 'BROADCAST_INTENT';
   requestId: string;
+  attemptId: string;
   operationId: string;
   sender: `0x${string}`;
   transactionNonce: string;
@@ -44,14 +45,33 @@ export type BroadcastHash = {
   createdAt: string;
 };
 
-export type RequestTerminal = {
-  type: 'REQUEST_TERMINAL';
+export type HttpRequestTerminal = {
+  type: 'HTTP_REQUEST_TERMINAL';
   requestId: string;
   outcome: 'SUCCEEDED' | 'FAILED';
   createdAt: string;
 };
 
-export type JournalEvent = HttpRequestStarted | HttpRequestAttempt | BroadcastIntent | BroadcastHash | RequestTerminal;
+export type BroadcastTerminal = {
+  type: 'BROADCAST_TERMINAL';
+  requestId: string;
+  operationId: string;
+  outcome: 'RECORDED' | 'RECONCILED';
+  createdAt: string;
+};
+
+export type PendingBroadcast = BroadcastIntent & {
+  transactionHash?: `0x${string}`;
+  recoveryAction: 'record' | 'reconcile';
+};
+
+export type JournalEvent =
+  | HttpRequestStarted
+  | HttpRequestAttempt
+  | HttpRequestTerminal
+  | BroadcastIntent
+  | BroadcastHash
+  | BroadcastTerminal;
 
 const JOURNAL_FILE = join(CONFIG_DIR, 'volem-request-journal.jsonl');
 
@@ -91,11 +111,13 @@ export class VolemRequestJournal {
     return events;
   }
 
-  beginHttpRequest(action: Evm2Action, body: Uint8Array): ActiveHttpRequest {
+  beginHttpRequest(action: Evm2Action, body: Uint8Array, requestedIdempotencyKey?: string): ActiveHttpRequest {
     const bodySha256 = evm2BodySha256(body);
     const events = this.events();
     const terminals = new Set(
-      events.filter((event): event is RequestTerminal => event.type === 'REQUEST_TERMINAL').map((event) => event.requestId),
+      events
+        .filter((event): event is HttpRequestTerminal => event.type === 'HTTP_REQUEST_TERMINAL')
+        .map((event) => event.requestId),
     );
     const existing = [...events]
       .reverse()
@@ -104,6 +126,7 @@ export class VolemRequestJournal {
           event.type === 'HTTP_REQUEST_STARTED' &&
           event.action === action &&
           event.bodySha256 === bodySha256 &&
+          (!requestedIdempotencyKey || event.idempotencyKey === requestedIdempotencyKey) &&
           !terminals.has(event.requestId),
       );
     const started = existing ?? (() => {
@@ -113,7 +136,7 @@ export class VolemRequestJournal {
         action,
         bodySha256,
         canonicalBodyBase64: Buffer.from(body).toString('base64'),
-        idempotencyKey: newEvm2RequestIdentity().idempotencyKey,
+        idempotencyKey: requestedIdempotencyKey ?? newEvm2RequestIdentity().idempotencyKey,
         createdAt: nowIso(),
       };
       this.append(created);
@@ -136,8 +159,47 @@ export class VolemRequestJournal {
     this.append({ type: 'BROADCAST_HASH', ...event, createdAt: nowIso() });
   }
 
-  markTerminal(requestId: string, outcome: RequestTerminal['outcome']): void {
-    this.append({ type: 'REQUEST_TERMINAL', requestId, outcome, createdAt: nowIso() });
+  pendingBroadcasts(): PendingBroadcast[] {
+    const events = this.events();
+    const terminals = new Set(
+      events
+        .filter((event): event is BroadcastTerminal => event.type === 'BROADCAST_TERMINAL')
+        .map((event) => event.operationId),
+    );
+    const hashes = new Map(
+      events
+        .filter((event): event is BroadcastHash => event.type === 'BROADCAST_HASH')
+        .map((event) => [event.operationId, event.transactionHash]),
+    );
+    const intents = new Map<string, BroadcastIntent>();
+    for (const event of events) {
+      if (event.type === 'BROADCAST_INTENT' && !terminals.has(event.operationId)) intents.set(event.operationId, event);
+    }
+    return [...intents.values()].map((intent) => {
+      const transactionHash = hashes.get(intent.operationId);
+      return {
+        ...intent,
+        ...(transactionHash ? { transactionHash } : {}),
+        recoveryAction: transactionHash ? 'record' : 'reconcile',
+      };
+    });
+  }
+
+  markHttpTerminal(requestId: string, outcome: HttpRequestTerminal['outcome']): void {
+    this.append({ type: 'HTTP_REQUEST_TERMINAL', requestId, outcome, createdAt: nowIso() });
+  }
+
+  markBroadcastTerminal(
+    requestId: string,
+    operationId: string,
+    outcome: BroadcastTerminal['outcome'],
+  ): void {
+    this.append({ type: 'BROADCAST_TERMINAL', requestId, operationId, outcome, createdAt: nowIso() });
+  }
+
+  closeBroadcast(operationId: string, outcome: BroadcastTerminal['outcome']): void {
+    const pending = this.pendingBroadcasts().find((entry) => entry.operationId === operationId);
+    if (pending) this.markBroadcastTerminal(pending.requestId, operationId, outcome);
   }
 }
 

@@ -44,6 +44,7 @@ export const signedVolemRequest = async (input: {
   action: Evm2Action;
   path: string;
   body?: Uint8Array;
+  idempotencyKey?: string;
   timeoutMs?: number;
   journal?: VolemRequestJournal;
   environment?: NodeJS.ProcessEnv;
@@ -52,7 +53,7 @@ export const signedVolemRequest = async (input: {
 }): Promise<SignedVolemRequest> => {
   const body = input.body ?? new Uint8Array();
   const journal = input.journal ?? defaultVolemRequestJournal;
-  const request = journal.beginHttpRequest(input.action, body);
+  const request = journal.beginHttpRequest(input.action, body, input.idempotencyKey);
   const privateKey = loadKey('evm') as `0x${string}`;
   const environment = input.environment ?? process.env;
   const logger = input.logger ?? log;
@@ -91,9 +92,9 @@ export const signedVolemRequest = async (input: {
     body: body.byteLength ? Buffer.from(body) : undefined,
     signal: AbortSignal.timeout(input.timeoutMs ?? 10_000),
   });
-  if (response.ok) journal.markTerminal(request.requestId, 'SUCCEEDED');
+  if (response.ok) journal.markHttpTerminal(request.requestId, 'SUCCEEDED');
   else if (response.status < 500 && response.status !== 409 && response.status !== 429) {
-    journal.markTerminal(request.requestId, 'FAILED');
+    journal.markHttpTerminal(request.requestId, 'FAILED');
   }
   return { response, request };
 };
