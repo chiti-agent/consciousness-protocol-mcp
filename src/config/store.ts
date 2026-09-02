@@ -4,7 +4,7 @@
  * Security: key files written with 0o600 (owner only), keys dir with 0o700.
  */
 
-import { readFileSync, writeFileSync, mkdirSync, existsSync, chmodSync } from 'node:fs';
+import { readFileSync, writeFileSync, mkdirSync, existsSync, chmodSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
 
@@ -77,6 +77,23 @@ export function saveKey(name: string, privateKey: string): void {
   ensureConfigDir();
   const keyFile = join(KEYS_DIR, `${name}.json`);
   writeFileSync(keyFile, JSON.stringify({ privateKey, savedAt: new Date().toISOString() }), { mode: 0o600 });
+}
+
+/** Return persisted wallet-key files without ever opening or exposing their contents. */
+export function persistedWalletKeyFiles(): string[] {
+  if (!existsSync(KEYS_DIR)) return [];
+  return readdirSync(KEYS_DIR, { withFileTypes: true })
+    .filter((entry) => entry.name.endsWith('.json') && (entry.isFile() || entry.isSymbolicLink()))
+    .map((entry) => join(KEYS_DIR, entry.name))
+    .sort();
+}
+
+/** Hosted HTTP is a keyless read service; persisted local wallet custody is a fatal misconfiguration. */
+export function assertHostedKeyless(): void {
+  const files = persistedWalletKeyFiles();
+  if (files.length > 0) {
+    throw new Error(`Hosted HTTP refuses persisted wallet keys under ${KEYS_DIR}: ${files.map((file) => file.split('/').pop()).join(', ')}`);
+  }
 }
 
 /** Validate Ethereum hex address format */

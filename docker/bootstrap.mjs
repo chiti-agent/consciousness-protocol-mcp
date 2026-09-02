@@ -1,71 +1,61 @@
 #!/usr/bin/env node
 /**
- * Container bootstrap — provisions ~/.consciousness-protocol/{config.json, keys/*.json}
- * from environment variables, reusing the already-tested setupAgent() logic so the
- * on-disk formats stay in lockstep with the application.
- *
- * Invoked once at container start by docker-entrypoint.sh, BEFORE the MCP server.
- *
- * Source-of-truth model: when wallet secrets are present in env, they are the
- * source of truth and this rewrites config.json + keys/* deterministically on every
- * boot (so rotating a Railway secret takes effect on redeploy). The hash chain
- * (chain.json / chain.lock) and registrations.json on the volume are NEVER touched.
- *
- * When NO wallet secret is in env, bootstrap skips entirely — supporting a
- * volume-provisioned deployment configured once via the `setup` MCP tool.
- *
- * Imports compiled output (dist/), so the image must be built before this runs.
+ * Hosted-container bootstrap. It writes read-only public configuration and
+ * deliberately never imports setupAgent or handles wallet private keys.
  */
-import { setupAgent } from '../dist/tools/setup.js';
 import { loadConfig, saveConfig } from '../dist/config/store.js';
 
 const env = process.env;
+const network = env.CP_NETWORK === 'mainnet' ? 'mainnet' : 'testnet';
 
-// No secrets in env -> assume the volume already holds a config provisioned manually.
-if (!env.CP_EVM_PRIVATE_KEY && !env.CP_NEAR_PRIVATE_KEY) {
-  console.error('[bootstrap] No CP_*_PRIVATE_KEY in env — assuming volume-provisioned config, skipping.');
-  process.exit(0);
-}
-
-// If any secret is present, ALL of these must be present — fail loud, never half-configure.
-const required = ['CP_AGENT_NAME', 'CP_EVM_PRIVATE_KEY', 'CP_NEAR_ACCOUNT', 'CP_NEAR_PRIVATE_KEY'];
-const missing = required.filter((k) => !env[k]);
-if (missing.length > 0) {
-  console.error(`[bootstrap] FATAL: missing required env vars: ${missing.join(', ')}`);
-  process.exit(1);
-}
-
-try {
-  await setupAgent({
-    agent_name: env.CP_AGENT_NAME,
-    network: env.CP_NETWORK === 'mainnet' ? 'mainnet' : 'testnet',
-    near_account: env.CP_NEAR_ACCOUNT,
-    near_private_key: env.CP_NEAR_PRIVATE_KEY,
-    evm_private_key: env.CP_EVM_PRIVATE_KEY,
-    pinata_jwt: env.CP_PINATA_JWT,
-  });
-
-  // setupAgent() does not set a search backend. search.ts defaults an unset backend
-  // to 'volem' -> http://localhost:3005, which does not exist in the container and
-  // costs a 10s timeout per search before falling back. Force a reachable backend:
-  //   - 'story' when a Story API key is provided
-  //   - 'local' otherwise (registrations.json only)
-  // An explicit CP_BACKEND always wins.
-  const cfg = loadConfig();
-  const explicit = env.CP_BACKEND;
-  if (explicit === 'volem' || explicit === 'story' || explicit === 'local') {
-    cfg.backend = explicit;
-  } else {
-    cfg.backend = env.CP_STORY_API_KEY ? 'story' : 'local';
+if (!env.CP_NEAR_ACCOUNT && !env.CP_EVM_ADDRESS) {
+  try {
+    const existing = loadConfig();
+    console.error(
+      `[bootstrap] Using existing keyless config for ${existing.near.accountId} (network=${existing.network}).`,
+    );
+    process.exit(0);
+  } catch {
+    console.error('[bootstrap] FATAL: CP_NEAR_ACCOUNT and CP_EVM_ADDRESS are required on a fresh hosted volume.');
+    process.exit(1);
   }
-  if (env.CP_VOLEM_API_URL) cfg.volemApiUrl = env.CP_VOLEM_API_URL;
-  if (env.CP_STORY_API_KEY) cfg.storyApiKey = env.CP_STORY_API_KEY;
-  saveConfig(cfg);
+}
 
-  console.error(
-    `[bootstrap] Provisioned ${cfg.near.accountId} (network=${cfg.network}, backend=${cfg.backend}).`,
-  );
-} catch (err) {
-  console.error('[bootstrap] FATAL:', err instanceof Error ? err.message : err);
+const missing = ['CP_NEAR_ACCOUNT', 'CP_EVM_ADDRESS'].filter((name) => !env[name]);
+if (missing.length > 0) {
+  console.error(`[bootstrap] FATAL: missing required public config: ${missing.join(', ')}`);
   process.exit(1);
 }
+if (!/^0x[0-9a-fA-F]{40}$/.test(env.CP_EVM_ADDRESS)) {
+  console.error('[bootstrap] FATAL: CP_EVM_ADDRESS must be a 20-byte hexadecimal address.');
+  process.exit(1);
+}
+
+const explicitBackend = env.CP_BACKEND;
+const backend =
+  explicitBackend === 'volem' || explicitBackend === 'story' || explicitBackend === 'local'
+    ? explicitBackend
+    : env.CP_STORY_API_KEY
+      ? 'story'
+      : 'local';
+
+saveConfig({
+  network,
+  near: {
+    accountId: env.CP_NEAR_ACCOUNT,
+    registryContract: network === 'testnet' ? 'consciousness-protocol.testnet' : 'consciousness-protocol.near',
+  },
+  story: {
+    evmAddress: env.CP_EVM_ADDRESS,
+    chainId: network === 'testnet' ? 'aeneid' : 'mainnet',
+    rpcUrl: network === 'testnet' ? 'https://aeneid.storyrpc.io' : 'https://mainnet.storyrpc.io',
+  },
+  ipfs: {},
+  backend,
+  ...(env.CP_VOLEM_API_URL ? { volemApiUrl: env.CP_VOLEM_API_URL } : {}),
+  ...(env.CP_STORY_API_KEY ? { storyApiKey: env.CP_STORY_API_KEY } : {}),
+});
+
+console.error(
+  `[bootstrap] Provisioned keyless hosted config for ${env.CP_NEAR_ACCOUNT} (network=${network}, backend=${backend}).`,
+);

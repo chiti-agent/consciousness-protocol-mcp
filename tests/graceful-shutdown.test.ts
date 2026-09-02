@@ -13,17 +13,24 @@
  * Runs against src/ via tsx (no build dependency).
  */
 
-import { describe, it } from 'node:test';
+import { after, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn, type ChildProcess } from 'node:child_process';
 import http from 'node:http';
 import net from 'node:net';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PROJECT_ROOT = join(__dirname, '..');
 const SERVER_ENTRY = join(PROJECT_ROOT, 'src', 'index.ts');
+const testHomes: string[] = [];
+
+after(() => {
+  for (const home of testHomes) rmSync(home, { recursive: true, force: true });
+});
 
 // ── helpers (mirrored from http-transport.test.ts) ──────────────────────────
 
@@ -70,10 +77,13 @@ interface SpawnedServer {
 
 function spawnServer(port: number): Promise<SpawnedServer> {
   return new Promise((resolve, reject) => {
+    const home = mkdtempSync(join(tmpdir(), 'cp-shutdown-home-'));
+    testHomes.push(home);
     const child = spawn('node', ['--import', 'tsx/esm', SERVER_ENTRY], {
       cwd: PROJECT_ROOT,
       env: {
         ...process.env,
+        HOME: home,
         MCP_TRANSPORT: 'http',
         MCP_PORT: String(port),
         // Fast shutdown timeout so tests don't hang on the backstop timer.

@@ -25,6 +25,8 @@ import http from 'node:http';
 import net from 'node:net';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PROJECT_ROOT = join(__dirname, '..');
@@ -71,11 +73,23 @@ interface SpawnedServer {
   isDead: () => boolean;
 }
 
+const testHomes: string[] = [];
+const newTestHome = (): string => {
+  const home = mkdtempSync(join(tmpdir(), 'cp-mcp-http-home-'));
+  testHomes.push(home);
+  return home;
+};
+
+after(() => {
+  for (const home of testHomes) rmSync(home, { recursive: true, force: true });
+});
+
 function spawnServer(port: number): Promise<SpawnedServer> {
   return new Promise((resolve, reject) => {
+    const home = newTestHome();
     const child = spawn('node', ['--import', 'tsx/esm', SERVER_ENTRY], {
       cwd: PROJECT_ROOT,
-      env: { ...process.env, MCP_TRANSPORT: 'http', MCP_PORT: String(port) },
+      env: { ...process.env, HOME: home, MCP_TRANSPORT: 'http', MCP_PORT: String(port) },
       stdio: ['ignore', 'pipe', 'pipe'],
     });
 
@@ -263,14 +277,10 @@ describe('HTTP transport — second session must not crash the process', () => {
 });
 
 /**
- * install_skill hardening: the tool installs to the host's ~/.claude/skills/ and
- * can auto-mint a license from the host wallet. On a hosted HTTP server both the
- * filesystem and the wallet belong to the SERVER, so a remote caller must not be
- * able to reach it. buildServer({ allowInstallSkill: false }) is used on the HTTP
- * path; this test asserts the tool is absent from tools/list over HTTP.
+ * Hosted hardening: the HTTP process is an exact read-only MCP and owns no wallet.
  */
-describe('HTTP transport — install_skill is gated off (hosted hardening)', () => {
-  it('tools/list does not advertise install_skill in http mode', async () => {
+describe('HTTP transport — hosted boundary', () => {
+  it('advertises exactly the frozen read-only allow-list', async () => {
     const port = await getFreePort();
     const local = await spawnServer(port);
     try {
@@ -294,18 +304,51 @@ describe('HTTP transport — install_skill is gated off (hosted hardening)', () 
       await delay(150);
 
       assert.equal(toolsList.status, 200, `tools/list should return 200, got ${toolsList.status}`);
-      // Sanity: a normal tool IS listed, so an empty/garbled body can't make the
-      // negative assertion pass vacuously.
-      assert.ok(
-        toolsList.body.includes('verify_chain'),
-        'tools/list must advertise the normal tools (sanity anchor verify_chain missing)',
-      );
-      assert.ok(
-        !toolsList.body.includes('install_skill'),
-        'install_skill must NOT be exposed over HTTP — it writes to the host fs and spends the host wallet',
+      const dataLine = toolsList.body.split('\n').find((line) => line.startsWith('data: '));
+      assert.ok(dataLine, 'tools/list must return an SSE data record');
+      const payload = JSON.parse(dataLine.slice('data: '.length)) as {
+        result: { tools: Array<{ name: string }> };
+      };
+      assert.deepEqual(
+        payload.result.tools.map((tool) => tool.name).sort(),
+        [
+          'get_agent',
+          'get_asset',
+          'get_revenue',
+          'get_revenue_all',
+          'get_thread',
+          'list_threads',
+          'search_works',
+          'verify_provenance',
+        ],
       );
     } finally {
       local.child.kill('SIGKILL');
     }
+  });
+
+  it('refuses startup when an actual persisted wallet key exists', async () => {
+    const port = await getFreePort();
+    const home = newTestHome();
+    const keys = join(home, '.consciousness-protocol', 'keys');
+    mkdirSync(keys, { recursive: true });
+    writeFileSync(join(keys, 'evm.json'), JSON.stringify({ privateKey: 'must-not-be-read' }));
+
+    const child = spawn('node', ['--import', 'tsx/esm', SERVER_ENTRY], {
+      cwd: PROJECT_ROOT,
+      env: { ...process.env, HOME: home, MCP_TRANSPORT: 'http', MCP_PORT: String(port) },
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    let stderr = '';
+    child.stderr.on('data', (chunk: Buffer) => {
+      stderr += chunk.toString();
+    });
+    const exit = await new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolve) => {
+      child.once('exit', (code, signal) => resolve({ code, signal }));
+    });
+    assert.deepEqual(exit, { code: 1, signal: null });
+    assert.match(stderr, /Hosted HTTP refuses persisted wallet keys/);
+    assert.match(stderr, /evm\.json/);
+    assert.doesNotMatch(stderr, /must-not-be-read/);
   });
 });

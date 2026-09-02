@@ -18,6 +18,8 @@ import { describe, it, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn, type ChildProcess } from 'node:child_process';
 import { join } from 'node:path';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 
 const SERVER_ENTRY = join(import.meta.dirname, '..', 'dist', 'index.js');
 const API_KEY = 'test-secret-key-0xCAFEBABE';
@@ -39,9 +41,11 @@ interface RunningServer {
  */
 function startServer(): Promise<RunningServer> {
   const port = nextPort();
+  const home = mkdtempSync(join(tmpdir(), 'cp-http-auth-home-'));
   const child = spawn(process.execPath, [SERVER_ENTRY, '--http'], {
     env: {
       ...process.env,
+      HOME: home,
       MCP_TRANSPORT: 'http',
       MCP_PORT: String(port),
       MCP_API_KEY: API_KEY,
@@ -54,6 +58,7 @@ function startServer(): Promise<RunningServer> {
       child.kill('SIGKILL');
       await new Promise((r) => setTimeout(r, 100));
     }
+    rmSync(home, { recursive: true, force: true });
   };
 
   return new Promise((resolve, reject) => {

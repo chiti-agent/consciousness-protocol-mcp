@@ -15,11 +15,11 @@ STATE_DIR="${HOME:-/home/node}/.consciousness-protocol"
 mkdir -p "$STATE_DIR/keys"
 
 # Railway mounts volumes owned by root. Hand the whole state dir to `node` so every
-# config/key/chain file is created and read by the unprivileged user. Best-effort:
+# config/chain file is created and read by the unprivileged user. Best-effort:
 # on a fresh image (no volume) the dir is already node-owned.
 chown -R node:node "$STATE_DIR" 2>/dev/null || true
 
-# Provision config + wallet keys from env (no-op when no secrets are present).
+# Provision public read-only config. The hosted bootstrap never handles wallet keys.
 gosu node node /app/docker/bootstrap.mjs
 
 # Hand off to the MCP server as `node`. exec keeps it as tini's direct child so

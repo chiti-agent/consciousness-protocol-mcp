@@ -1,9 +1,8 @@
 # syntax=docker/dockerfile:1
 #
-# Client/self-custody MCP image for consciousness-protocol-mcp.
-# This image is for agents that intentionally self-host their signer/local-state
-# MCP. Volem-hosted read-only MCP is built from the Volem repo's `mcp` target,
-# not from this client package.
+# Hosted read-only MCP image for consciousness-protocol-mcp.
+# Self-custody signing and broadcasting run through the locally installed stdio
+# entry point; this HTTP image refuses persisted wallet keys at startup.
 #
 # Multi-stage:
 #   builder -> full deps + `tsc` -> dist/
@@ -58,5 +57,5 @@ RUN chmod +x /usr/local/bin/docker-entrypoint.sh \
 # IMPORTANT: no `USER node` here. The container starts as root so the entrypoint
 # can chown the Railway volume (Railway mounts volumes owned by root). The
 # entrypoint immediately drops to the unprivileged `node` user via gosu before
-# running ANY application/bootstrap code — wallet keys are never handled by root.
+# running application/bootstrap code.
 ENTRYPOINT ["tini", "--", "/usr/local/bin/docker-entrypoint.sh"]

@@ -17,10 +17,17 @@ import http from 'node:http';
 import net from 'node:net';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PROJECT_ROOT = join(__dirname, '..');
 const SERVER_ENTRY = join(PROJECT_ROOT, 'src', 'index.ts');
+const testHomes: string[] = [];
+
+after(() => {
+  for (const home of testHomes) rmSync(home, { recursive: true, force: true });
+});
 
 const JSON_HEADERS = {
   'content-type': 'application/json',
@@ -67,10 +74,13 @@ interface SpawnedServer {
 
 function spawnServer(port: number, extraEnv: Record<string, string> = {}): Promise<SpawnedServer> {
   return new Promise((resolve, reject) => {
+    const home = mkdtempSync(join(tmpdir(), 'cp-rate-limit-home-'));
+    testHomes.push(home);
     const child = spawn('node', ['--import', 'tsx/esm', SERVER_ENTRY], {
       cwd: PROJECT_ROOT,
       env: {
         ...process.env,
+        HOME: home,
         MCP_TRANSPORT: 'http',
         MCP_PORT: String(port),
         ...extraEnv,

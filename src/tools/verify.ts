@@ -10,8 +10,6 @@ import { createHash } from 'node:crypto';
 export const verifyProvenanceTool = {
   async verify(config: Config, ipId: string) {
     try {
-      const { loadKey } = await import('../config/store.js');
-      const { privateKeyToAccount } = await import('viem/accounts');
       const { createPublicClient, http, formatEther } = await import('viem');
       const { nearTools } = await import('./near.js');
 

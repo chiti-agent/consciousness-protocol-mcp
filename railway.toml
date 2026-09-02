@@ -9,7 +9,7 @@
 # DEPLOY PREREQUISITES (all landed in main): multi-session crash fix
 # (per-session buildServer), bearer/API-key auth on /mcp (MCP_API_KEY), and the
 # unauthenticated liveness endpoint below. See docs/deploy-runbook.md for the
-# operational checklist and the secrets required before the first deploy.
+# operational checklist and the public configuration required before the first deploy.
 
 [build]
 builder = "DOCKERFILE"
@@ -24,7 +24,7 @@ dockerfilePath = "Dockerfile"
 healthcheckPath = "/health"
 healthcheckTimeout = 30
 
-# Restart on crash, but cap retries so a hard misconfig (e.g. bad key) surfaces
+# Restart on crash, but cap retries so a hard misconfiguration surfaces
 # instead of crash-looping forever.
 restartPolicyType = "ON_FAILURE"
 restartPolicyMaxRetries = 5
