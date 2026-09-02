@@ -61,7 +61,7 @@ describe('Volem V1 call-site migration', () => {
         event_type: 'LICENSE_MINTED',
       });
       assert.equal(
-        (await requestVolemContentKey(config, '0x0000000000000000000000000000000000000001')).ok,
+        (await requestVolemContentKey(config, '0x0000000000000000000000000000000000000001')).response.ok,
         true,
       );
     } finally {

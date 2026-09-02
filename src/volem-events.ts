@@ -26,7 +26,7 @@ export async function postVolemEvent(config: Config, event: VolemEvent): Promise
 
   try {
     const txHash = event.tx_hash && TX_HASH_RE.test(event.tx_hash) ? event.tx_hash : undefined;
-    const { response: res } = await signedVolemRequest({
+    const { response: res, complete } = await signedVolemRequest({
       config,
       action: 'ip.event',
       path: '/api/ip/event',
@@ -39,7 +39,9 @@ export async function postVolemEvent(config: Config, event: VolemEvent): Promise
         metadata: event.metadata,
       }),
     });
-    if (!res.ok) {
+    if (res.ok) {
+      complete();
+    } else {
       console.error(`Volem event failed: ${res.status} ${await res.text()}`);
     }
   } catch (err) {

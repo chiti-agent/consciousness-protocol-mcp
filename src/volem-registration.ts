@@ -16,13 +16,16 @@ export async function postToVolem(
   data: Record<string, unknown>,
 ): Promise<VolemWriteResult> {
   try {
-    const { response } = await signedVolemRequest({
+    const { response, complete } = await signedVolemRequest({
       config,
       action: 'ip.register',
       path: '/api/ip/register',
       body: jsonRequestBody(data),
     });
-    if (response.ok) return { ok: true };
+    if (response.ok) {
+      complete();
+      return { ok: true };
+    }
 
     const detail = await response.text();
     const error = `Volem register failed: HTTP ${response.status}${detail ? ` ${detail}` : ''}`;

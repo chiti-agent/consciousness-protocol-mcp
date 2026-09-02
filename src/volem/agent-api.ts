@@ -78,7 +78,7 @@ const signedJson = async (input: {
   idempotencyKey?: string;
   journal?: VolemRequestJournal;
 }): Promise<{ result: Record<string, unknown>; requestId: string; idempotencyKey: string }> => {
-  const { response, request } = await signedVolemRequest({
+  const { response, request, complete } = await signedVolemRequest({
     config: input.config,
     action: input.action,
     path: input.path,
@@ -86,8 +86,10 @@ const signedJson = async (input: {
     idempotencyKey: input.idempotencyKey,
     journal: input.journal,
   });
+  const parsed = await responseJson<Record<string, unknown>>(response);
+  if (response.ok) complete();
   return {
-    result: await responseJson<Record<string, unknown>>(response),
+    result: parsed,
     requestId: request.requestId,
     idempotencyKey: request.idempotencyKey,
   };

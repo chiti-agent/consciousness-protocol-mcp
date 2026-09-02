@@ -37,6 +37,7 @@ const legacyAuthorization = async (privateKey: `0x${string}`): Promise<string> =
 export type SignedVolemRequest = {
   response: Response;
   request: ActiveHttpRequest;
+  complete: (outcome?: 'SUCCEEDED' | 'FAILED') => void;
 };
 
 export const signedVolemRequest = async (input: {
@@ -92,9 +93,12 @@ export const signedVolemRequest = async (input: {
     body: body.byteLength ? Buffer.from(body) : undefined,
     signal: AbortSignal.timeout(input.timeoutMs ?? 10_000),
   });
-  if (response.ok) journal.markHttpTerminal(request.requestId, 'SUCCEEDED');
-  else if (response.status < 500 && response.status !== 409 && response.status !== 429) {
+  if (!response.ok && response.status < 500 && response.status !== 409 && response.status !== 429) {
     journal.markHttpTerminal(request.requestId, 'FAILED');
   }
-  return { response, request };
+  return {
+    response,
+    request,
+    complete: (outcome = 'SUCCEEDED') => journal.markHttpTerminal(request.requestId, outcome),
+  };
 };

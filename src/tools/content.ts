@@ -31,14 +31,13 @@ type VolemAsset = {
 const isTextMime = (mime: string | null | undefined): boolean =>
   !!mime && (mime.startsWith('text/') || mime === 'application/json');
 
-export const requestVolemContentKey = async (config: Config, ipId: string): Promise<Response> => {
-  const { response } = await signedVolemRequest({
+export const requestVolemContentKey = async (config: Config, ipId: string) => {
+  return signedVolemRequest({
     config,
     action: 'ip.content-key',
     path: `/api/ip/${ipId}/content-key`,
     timeoutMs: 15_000,
   });
-  return response;
 };
 
 export function assertVolemMatchesStory(
@@ -80,7 +79,7 @@ export const contentTool = {
       let effectiveMime = metadata.mediaType ?? asset.ipType ?? null;
 
       if (gated) {
-        const keyRes = await requestVolemContentKey(config, params.ip_id);
+        const { response: keyRes, complete } = await requestVolemContentKey(config, params.ip_id);
         if (keyRes.status === 403) {
           return {
             success: false,
@@ -91,6 +90,7 @@ export const contentTool = {
           return { success: false, error: `Content key request failed: HTTP ${keyRes.status} ${await keyRes.text()}` };
         }
         const keyData = await keyRes.json() as { key: string; encryptedMediaType?: string | null };
+        complete();
         key = keyData.key;
         effectiveMime = keyData.encryptedMediaType ?? asset.encryptedMediaType ?? effectiveMime;
       }

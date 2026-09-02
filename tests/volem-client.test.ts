@@ -61,6 +61,38 @@ describe('signed Volem HTTP client', () => {
     assert.equal(first.path, '/api/threads');
   });
 
+  it('does not close a successful logical request until its caller consumes the response', async () => {
+    const journal = new VolemRequestJournal(join(testHome, 'response-journal.jsonl'));
+    const body = jsonRequestBody({ title: 'response may be lost' });
+    const first = await signedVolemRequest({
+      config,
+      action: 'thread.create',
+      path: '/api/threads',
+      body,
+      journal,
+      fetcher: async () => Response.json({ success: true }),
+    });
+    const beforeConsumption = await signedVolemRequest({
+      config,
+      action: 'thread.create',
+      path: '/api/threads',
+      body,
+      journal,
+      fetcher: async () => Response.json({ success: true }),
+    });
+    assert.equal(beforeConsumption.request.idempotencyKey, first.request.idempotencyKey);
+    beforeConsumption.complete();
+    const afterConsumption = await signedVolemRequest({
+      config,
+      action: 'thread.create',
+      path: '/api/threads',
+      body,
+      journal,
+      fetcher: async () => Response.json({ success: true }),
+    });
+    assert.notEqual(afterConsumption.request.idempotencyKey, first.request.idempotencyKey);
+  });
+
   it('uses V1 only when explicitly selected before a per-action deadline and logs it', async () => {
     const lines: string[] = [];
     let authorization = '';
