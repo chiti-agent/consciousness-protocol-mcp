@@ -1,5 +1,17 @@
 # Design: P6 client signer and agent tools
 
+> **STATUS 2026-09-02: FIFTH REVISION — design rounds closed.** Third blocked gate. Three of the
+> four blockers are fixed below. The fourth is the one the gate and I have now disagreed about in
+> three consecutive rounds, and under the finite-rounds rule that makes it a human decision rather
+> than a fourth assertion. Both readings are stated in "The hosted question, unresolved after three
+> rounds" — I am not restating mine as settled.
+>
+> Fixed: `resume` and the crash path swept out of the remaining criteria that still called them
+> reads; the journal's intent row `fsync`ed before the RPC call rather than merely written, and the
+> **signature nonce** separated from the **transaction nonce**, which the previous revision called by
+> one name; the V1 deadline reassigned from S3, which was complete and about something else, to S4,
+> which migrates the routes.
+>
 > **STATUS 2026-09-01: FOURTH REVISION after the second gate.** Six blockers. One of them is the
 > third occurrence today of a single failure — **I fold in corrections and leave the older text that
 > contradicts them standing** — so this revision sweeps the whole document rather than patching
@@ -102,7 +114,38 @@ A repo-wide search for a second gate — `readOnly`, `isHosted`, an allow-list �
 ownership check and the content-key column read, and it has the same shape as both: a rule written
 correctly in a comment and applied in one place.
 
-**It is still a decision, and the gate was wrong that it is not.** The parent's read-only constraint
+## The hosted question, unresolved after three rounds
+
+Three gate rounds, three disagreements, no movement. Under the finite-rounds rule this stops being
+something to argue and becomes something to decide. Both readings, stated fairly:
+
+**The gate's reading:** the parent plan fixes hosted read-only, so the eight signing tools exposed on
+this package's HTTP transport are a defect against a settled constraint, and closing them needs no
+decision.
+
+**My reading:** the parent's constraint names `volem-mcp`, which `README.md:11` places inside the
+Volem app exposing DB-backed reads only. This package is described in the same file as the
+client/self-custody MCP owning the full read/write toolset, and it is deployed over HTTP deliberately
+per `docs/deploy-runbook.md`. So the parent does not reach it, and closing the eight removes
+capability from a live deployment.
+
+**What both readings agree on**, and what matters more than which is right:
+
+- `docs/deploy-runbook.md:80-81` makes `CP_NEAR_PRIVATE_KEY` and `CP_EVM_PRIVATE_KEY` **required**
+  for the hosted deployment.
+- Eight tools sign with them unconditionally: registration, derivative registration, licence minting,
+  licensing config, royalty payment, revenue claim, and gated-content retrieval.
+- A holder of the deployment's bearer token can therefore spend the host's funds.
+- Nobody disputes that this should not be so. The dispute is only whether closing it is a decision
+  or an obligation — and the fix is identical either way.
+
+**Recommendation: close it.** If the human agrees, the disagreement was never load-bearing. If the
+human wants the hosted writers kept, that is the answer no reading of the parent could have given,
+which is exactly why it needed a person.
+
+---
+
+**The superseded argument, kept for the record.** The parent's read-only constraint
 names `volem-mcp`, a separate server inside the Volem app (`README.md:11`); this package is
 deliberately the full read/write client. Nothing in the parent governs this repository's HTTP mode.
 
@@ -164,8 +207,10 @@ nothing.
 **This is a dependency with an owner and a stage, not just a repository.** Naming "the Volem side"
 named a place and no one; a dependency assigned to no stage is one nobody delivers.
 
-**Owner: Volem, stage S3** — the same stage that migrates the three routes to EVM2, because the
-route that starts refusing V1 is the route that must announce when it will. It publishes per-route
+**Owner: Volem, stage S4** — "dual-stack legacy route migration", the stage that actually migrates
+the routes. The previous revision said S3, which is "one acceptance application boundary and agent-author
+eligibility" and was already complete; I named a stage without reading the stage list, which is the
+same failure as naming a repository without an owner. It publishes per-route
 V1 retirement dates on an **unauthenticated** endpoint, so a client can refuse V1 past the date
 without a human relaying it. **S7 consumes it; S8 verifies both sides against the same dates.**
 If S3 ships without it, this delivery falls back to the operator-configured path below and says so
@@ -209,10 +254,21 @@ under the client's own state directory, one record per attempt:
 
 | Written | When |
 |---|---|
-| attempt id, action, **idempotency key**, canonical request bytes, reserved nonce | before the request is signed |
-| **intent-to-broadcast**, with the sender and nonce | immediately before the RPC call |
+| attempt id, action, **idempotency key**, canonical request bytes, **signature nonce** | before the request is signed |
+| **intent-to-broadcast**, with the sender address and the **transaction nonce** | immediately before the RPC call, and `fsync`ed before the call returns control |
 | transaction hash | as soon as the RPC returns one, before anything else |
 | terminal outcome | when the server confirms |
+
+⚠️ **Two different nonces, and the earlier revision used one word for both.** The **signature nonce**
+is 128 bits of CSPRNG in the EVM2 payload and exists to stop replay; the **transaction nonce** is the
+wallet's sequence number on chain. They are journalled in different rows for different reasons, and
+reconciliation by identity uses the transaction nonce alone. Conflating them is how a recovery path
+searches the chain for a number that was never on it.
+
+⚠️ **The intent row must be durable before the RPC call, not merely written.** A buffered write that
+has not reached disk is lost by exactly the crash it exists for, so the intent row is `fsync`ed and
+the RPC call does not begin until it is. This costs one sync per broadcast and buys the only thing
+the row is for.
 
 ⚠️ **The intent row exists because acceptance and persistence are two steps.** A crash after the RPC
 accepted the transaction and before the hash reached disk leaves no hash — the previous revision's
@@ -252,11 +308,15 @@ three round trips for one intent is a bad tool.
 
 But `record` remains its own tool, and this is not redundancy:
 
-- A process that dies between broadcast and record holds the only copy of a transaction hash. The
-  separate tool is how that hash gets home.
-- **`resume` and `load` never start a second attempt.** They read. An orchestration that silently
-  re-prepares on resume is how one intent becomes two nonces, and Volem's P5 spent two review rounds
-  on exactly that class of defect.
+- **A caller that lost the response still holds the hash.** `record` is how that hash gets home.
+  It is *not* the answer to a dead process, which holds nothing — that is the journal's job, and the
+  earlier text claiming otherwise is corrected in the journal section above.
+- **`resume` never starts a second attempt, though it does write.** It pins metadata when the
+  attempt is `PREPARING` (`contribution-acceptance-application-service.ts:214`), which is
+  idempotent on the attempt and reuses the journalled idempotency key. What it must never do is
+  prepare a *second* operation: an orchestration that silently re-prepares is how one intent becomes
+  two transaction nonces, and Volem's P5 spent two review rounds on that class.
+- **`load` reads and writes nothing.**
 
 ## Extraction, because the file may only shrink
 
