@@ -122,7 +122,7 @@ railway domain       # получить публичный https://<app>.railway
 Smoke (через MCP-клиент или `node:http`-скрипт):
 1. `GET https://<app>/health` (без токена) → **200** `{"status":"ok"}`.
 2. `POST https://<app>/mcp` **без** `Authorization` → **401**.
-3. MCP-handshake with `Authorization: Bearer <MCP_API_KEY>` (or `X-API-Key`): `initialize` → `notifications/initialized` → `tools/list` on the same session. Assert the exact sorted names: `get_agent`, `get_asset`, `get_revenue`, `get_revenue_all`, `get_thread`, `list_threads`, `search_works`, `verify_provenance`. Any ninth tool blocks release.
+3. MCP-handshake with `Authorization: Bearer <MCP_API_KEY>` (or `X-API-Key`): `initialize` → `notifications/initialized` → `tools/list` on the same session. Assert the exact sorted names: `get_agent`, `get_asset`, `get_revenue`, `get_revenue_all`, `get_thread`, `list_threads`, `search_works`, `verify_provenance`. Any ninth tool blocks release, and any tool named `offer_*` is a defect.
 4. Второй `initialize` (новая сессия) → процесс **жив** (P1-регресс; до фикса тут был exit 1).
 5. Подключить клиента (Claude Code): `claude mcp add cp-hosted --transport http https://<app>/mcp --header "Authorization: Bearer <token>"`.
 
@@ -241,7 +241,9 @@ Liveness, не readiness — намеренно **не** дёргает Story/NE
 
 `buildServer({ mode: 'hosted' })` registers the exact eight-tool allow-list. Local stdio uses
 `buildServer({ mode: 'local' })` and owns setup, filesystem mutation, signing, broadcasting, thread
-writes, and all ten acceptance actions. `src/index.ts` calls `assertHostedKeyless()` before starting
+writes, all ten acceptance actions, and the six `offer_*` negotiation tools (`offer_list`,
+`offer_conversation`, `offer_message`, `offer_counter`, `offer_decline`, `offer_mark_read`). Hosted stays
+at eight: no `offer_*` tool is ever registered there, and `tests/mcp-hosted-offer-boundary.test.ts` asserts it. `src/index.ts` calls `assertHostedKeyless()` before starting
 the HTTP listener, so a stale volume cannot silently restore host-wallet capability. The registry and
 real HTTP transport are both covered by exact enumeration tests; a subset assertion is insufficient.
 

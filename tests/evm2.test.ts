@@ -7,6 +7,7 @@ import {
   canonicalizeEvm2Envelope,
   createEvm2Authorization,
   encodeEvm2Envelope,
+  EVM2_ACTIONS,
   evm2BodySha256,
   evm2Preimage,
   type Evm2Envelope,
@@ -41,6 +42,31 @@ describe('EVM2 client bytes', () => {
       issuedAt: fixture.envelope.issuedAt,
     });
     assert.equal(signed.authorization, fixture.authorization);
+  });
+
+  it('registers the six offer-negotiation actions after the acceptance ones, as Volem does', () => {
+    assert.deepEqual(EVM2_ACTIONS.slice(-6), [
+      'offer.list',
+      'offer.conversation',
+      'offer.message',
+      'offer.counter',
+      'offer.decline',
+      'offer.mark-read',
+    ]);
+    assert.equal(EVM2_ACTIONS.length, 21);
+  });
+
+  it('signs an offer envelope that its own closed schema accepts', async () => {
+    const signed = await createEvm2Authorization({
+      privateKey: fixture.privateKey,
+      domain: fixture.envelope.domain,
+      chainId: fixture.envelope.chainId,
+      path: '/api/contribution-offers',
+      action: 'offer.mark-read',
+      body: new TextEncoder().encode(fixture.bodyUtf8),
+    });
+    assert.equal(signed.envelope.action, 'offer.mark-read');
+    assert.equal(canonicalizeEvm2Envelope(signed.envelope), signed.canonical);
   });
 
   it('rejects query-bearing request paths instead of signing them', async () => {

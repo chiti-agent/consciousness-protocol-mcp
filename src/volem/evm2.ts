@@ -20,6 +20,12 @@ export const EVM2_ACTIONS = [
   'acceptance.reconcile',
   'acceptance.confirm',
   'acceptance.finalize',
+  'offer.list',
+  'offer.conversation',
+  'offer.message',
+  'offer.counter',
+  'offer.decline',
+  'offer.mark-read',
 ] as const;
 
 export type Evm2Action = (typeof EVM2_ACTIONS)[number];

@@ -1,3 +1,5 @@
+import { randomUUID } from 'node:crypto';
+
 import type { Config } from '../config/store.js';
 import { jsonRequestBody, signedVolemRequest } from './client.js';
 import { defaultVolemRequestJournal, type VolemRequestJournal } from './request-journal.js';
@@ -16,6 +18,13 @@ export const ACCEPTANCE_ACTIONS = [
 ] as const;
 
 export type AcceptanceAction = (typeof ACCEPTANCE_ACTIONS)[number];
+
+/** The six actions of the private offer-negotiation route; each is signed as `offer.<action>`. */
+export const OFFER_ACTIONS = ['list', 'conversation', 'message', 'counter', 'decline', 'mark-read'] as const;
+
+export type OfferAction = (typeof OFFER_ACTIONS)[number];
+
+const OFFER_READ_ACTIONS: ReadonlySet<OfferAction> = new Set(['list', 'conversation', 'mark-read']);
 
 export type AcceptanceOperation = {
   operationId: string;
@@ -42,6 +51,14 @@ export type AcceptanceResponse = {
   outcome?: string;
   readyToSubmit?: boolean;
   readyToConfirm?: boolean;
+  [key: string]: unknown;
+};
+
+/** A domain failure is `{ success: false, code }` and a protocol failure is `{ error }`; neither carries text. */
+export type OfferResponse = {
+  success?: boolean;
+  code?: string;
+  error?: string;
   [key: string]: unknown;
 };
 
@@ -72,7 +89,7 @@ export const getVolemThread = async (config: Config, number: number): Promise<un
 
 const signedJson = async (input: {
   config: Config;
-  action: 'thread.create' | 'thread.reply' | `acceptance.${AcceptanceAction}`;
+  action: 'thread.create' | 'thread.reply' | `acceptance.${AcceptanceAction}` | `offer.${OfferAction}`;
   path: string;
   value: Record<string, unknown>;
   idempotencyKey?: string;
@@ -140,3 +157,26 @@ export const runVolemAcceptance = async (input: {
   }
   return { ...response, result };
 };
+
+/**
+ * One call of the offer-negotiation route. The server requires an idempotency key on all six actions.
+ * A write takes the caller's key, so a retry of the same write is answered from its recorded entry
+ * instead of writing twice. A read has nothing to deduplicate and is repeated under a fresh authorization,
+ * so it mints a new key per call unless the caller passes one. The request journal keeps the signed body,
+ * which never holds a contributor's text: only the agent's own message, note and numbers leave here.
+ */
+export const runVolemOffer = (input: {
+  config: Config;
+  action: OfferAction;
+  body: Record<string, unknown>;
+  idempotencyKey?: string;
+  journal?: VolemRequestJournal;
+}): Promise<{ result: OfferResponse; requestId: string; idempotencyKey: string }> =>
+  signedJson({
+    config: input.config,
+    action: `offer.${input.action}`,
+    path: '/api/contribution-offers',
+    value: { action: input.action, ...input.body },
+    idempotencyKey: input.idempotencyKey ?? (OFFER_READ_ACTIONS.has(input.action) ? randomUUID() : undefined),
+    journal: input.journal,
+  });
